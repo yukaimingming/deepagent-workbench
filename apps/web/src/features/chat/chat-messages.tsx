@@ -46,6 +46,7 @@ import {
   ArrowUpIcon,
   TerminalIcon,
 } from "lucide-react";
+import { cn } from "../../lib/utils.js";
 import type { Activity, ChatMessage } from "./chat-types.js";
 
 interface ChatMessagesProps {
@@ -391,12 +392,12 @@ export function ChatMessages({
                           <span className="text-[13px] text-zinc-500 animate-pulse">
                             正在输出回答…
                           </span>
-                        ) : message.streaming ? (
-                          <p className="streaming-caret whitespace-pre-wrap break-words leading-relaxed text-zinc-100">
-                            {message.content}
-                          </p>
                         ) : message.content.length > 0 ? (
-                          <MessageResponse mode="static">{message.content}</MessageResponse>
+                          <div className={cn("w-full text-zinc-100", message.streaming && "streaming-caret")}>
+                            <MessageResponse mode={message.streaming ? "streaming" : "static"}>
+                              {message.content}
+                            </MessageResponse>
+                          </div>
                         ) : null}
                       </MessageContent>
 
