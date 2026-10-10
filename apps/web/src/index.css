@@ -243,35 +243,37 @@ html.light [data-slot="prompt-input"] textarea::placeholder {
   color: #94a3b8 !important;
 }
 html.light [data-testid="workspace-mode-selector"] {
-  background-color: #ffffff !important;
-  border-color: #e2e8f0 !important;
+  background-color: #f1f5f9 !important;
+  border: none !important;
   color: #0f172a !important;
 }
 html.light [data-testid="workspace-mode-selector"]:hover {
-  background-color: #f8fafc !important;
-  border-color: #cbd5e1 !important;
+  background-color: #e2e8f0 !important;
 }
 html.light [data-testid="workspace-mode-selector"] span {
   color: #0f172a !important;
 }
 html.light .workspace-dropdown-panel {
   background-color: #ffffff !important;
-  border-color: #e2e8f0 !important;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
 }
 html.light .workspace-dropdown-panel button {
   color: #334155 !important;
 }
-html.light .workspace-dropdown-panel button:hover {
+html.light .workspace-dropdown-panel button:hover,
+html.light .workspace-dropdown-panel button.bg-\[\#2f2f35\] {
   background-color: #f1f5f9 !important;
   color: #0f172a !important;
 }
-html.light .workspace-dropdown-panel button.bg-zinc-800\/80,
-html.light .workspace-dropdown-panel button.bg-zinc-800 {
-  background-color: #e2e8f0 !important;
+html.light .workspace-dropdown-panel button span {
   color: #0f172a !important;
 }
-html.light .workspace-dropdown-panel button span {
+html.light .workspace-dropdown-panel button svg {
+  color: #64748b !important;
+}
+html.light .workspace-dropdown-panel button:hover svg,
+html.light .workspace-dropdown-panel button.bg-\[\#2f2f35\] svg {
   color: #0f172a !important;
 }
 

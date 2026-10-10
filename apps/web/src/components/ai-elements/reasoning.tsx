@@ -257,11 +257,7 @@ export const ReasoningContent = memo(
         {...props}
       >
         <div className={cn(isStreaming ? "streaming-caret" : "")}>
-          {content ? (
-            <Streamdown>{content}</Streamdown>
-          ) : isStreaming ? (
-            <span className="text-zinc-500 text-xs italic">正在组织思路…</span>
-          ) : null}
+          {content ? <Streamdown>{content}</Streamdown> : null}
         </div>
       </CollapsibleContent>
     );

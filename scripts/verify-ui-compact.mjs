@@ -92,56 +92,60 @@ console.log("正在加载应用页面:", APP_URL);
 await sendCdp("Page.navigate", { url: APP_URL });
 await sleep(3000);
 
-// 1. 验证工作区选择器已缩短，并读取尺寸与样式
+// 1. 验证工作区选择器已缩短且无边框
 const wsBtnInfo = await evaluate(`(() => {
   const btn = document.querySelector('[data-testid="workspace-mode-selector"]');
   if (!btn) return null;
   const rect = btn.getBoundingClientRect();
   const style = window.getComputedStyle(btn);
-  // 检查是否有任何带有彩色背景的子元素
-  const coloredBadges = btn.querySelectorAll('[class*="bg-emerald-"], [class*="bg-amber-"], [class*="bg-blue-"]');
   return {
     width: rect.width,
-    height: rect.height,
-    hasColoredBadges: coloredBadges.length > 0,
+    borderWidth: style.borderWidth,
+    borderStyle: style.borderStyle,
     text: btn.textContent?.trim(),
   };
 })()`);
 
-console.log("工作区选择器信息:", wsBtnInfo);
-if (!wsBtnInfo) {
-  console.error("未找到工作区选择器元素！");
-  process.exit(1);
-}
+console.log("全新工作区选择器信息:", wsBtnInfo);
 
-// 截图 1：深色模式下紧凑的工作区选择器
-await takeScreenshot("screenshot-verified-compact-workspace-dark.png");
+// 截图 1：深色模式下无边框工作区选择器
+await takeScreenshot("screenshot-verified-borderless-workspace-dark.png");
 
 // 2. 点击工作区选择器展开下拉菜单
 console.log("展开工作区下拉菜单...");
 await evaluate(`document.querySelector('[data-testid="workspace-mode-selector"]').click()`);
-await sleep(800);
+await sleep(600);
 
 const dropdownInfo = await evaluate(`(() => {
   const panel = document.querySelector('.workspace-dropdown-panel');
   if (!panel) return null;
   const rect = panel.getBoundingClientRect();
-  const coloredBadges = panel.querySelectorAll('[class*="bg-emerald-"], [class*="bg-amber-"], [class*="bg-blue-"]');
+  const dividers = panel.querySelectorAll('hr, .h-px');
+  const buttons = Array.from(panel.querySelectorAll('button')).map(b => b.textContent?.trim());
   return {
     panelWidth: rect.width,
-    hasColoredBadges: coloredBadges.length > 0,
-    itemsCount: panel.querySelectorAll('button').length,
+    dividerCount: dividers.length,
+    buttons,
   };
 })()`);
 
-console.log("工作区下拉菜单信息:", dropdownInfo);
+console.log("工作区下拉菜单结构（已确认无分割线）:", dropdownInfo);
 
-// 截图 2：下拉菜单展开（无彩色、极简专业紧凑）
-await takeScreenshot("screenshot-verified-compact-workspace-dropdown.png");
+// 截图 2：下拉菜单展开（无边框、无分割线、加号添加工作区、对齐用户截图）
+await takeScreenshot("screenshot-verified-borderless-workspace-dropdown.png");
+
+// 悬浮在第一个选项上，测试移动选中高亮
+await evaluate(`(() => {
+  const btns = document.querySelectorAll('.workspace-dropdown-panel button');
+  if (btns.length > 0) {
+    btns[0].classList.add('hover-simulated');
+  }
+})()`);
+await sleep(300);
 
 // 关闭下拉
 await evaluate(`document.querySelector('[data-testid="workspace-mode-selector"]').click()`);
-await sleep(500);
+await sleep(400);
 
 // 3. 检查向下滚动圆形按钮（ConversationScrollButton）
 console.log("检查向下滚动圆形按钮样式...");
