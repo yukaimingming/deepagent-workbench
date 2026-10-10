@@ -257,25 +257,12 @@ export async function createApp(options: ServerOptions) {
     if (method === "POST" && path === "/api/workspace/delete") {
       const body = await readJsonBody(req);
       const targetPath = typeof body?.path === "string" ? body.path.trim() : "";
-      if (!targetPath) {
-        sendJson(res, 400, { error: "缺少文件夹路径" });
-        return;
-      }
-      const resolvedTarget = resolve(targetPath);
-      // 安全限制：不允许删除系统根目录、盘符根目录、或整个项目源代码根目录
-      const forbiddenPaths = ["C:\\", "D:\\", "/", "\\", resolve("d:/temp/langchain")];
-      if (forbiddenPaths.includes(resolvedTarget)) {
-        sendJson(res, 403, { error: "禁止删除受保护的根目录" });
-        return;
-      }
-      try {
-        await rm(resolvedTarget, { recursive: true, force: true });
-        sendJson(res, 200, { ok: true, deletedPath: resolvedTarget });
-      } catch (error) {
-        sendJson(res, 500, {
-          error: "删除文件夹失败: " + (error instanceof Error ? error.message : String(error)),
-        });
-      }
+      // 永久安全规范：工作区移除只允许解除关联，绝对禁止删除物理磁盘上的任何文件夹！
+      sendJson(res, 200, {
+        ok: true,
+        message: "工作区已解除关联（保留物理磁盘所有文件）",
+        path: targetPath,
+      });
       return;
     }
 

@@ -17,6 +17,7 @@ import {
   ChevronRightIcon,
   PlusIcon,
   FolderPlusIcon,
+  FolderMinusIcon,
   Trash2Icon,
   PanelLeftCloseIcon,
   SettingsIcon,
@@ -116,21 +117,11 @@ export function WorkspaceSidebar({
     [onAddWorkspace, onSelect, onNewSession],
   );
 
-  /** 确认删除文件夹 */
+  /** 确认从列表中移除工作区文件夹（仅取消关联，绝不删除物理磁盘文件） */
   const handleConfirmDeleteFolder = useCallback(async () => {
     if (!folderToDelete) return;
     const { path } = folderToDelete;
-    try {
-      // 尝试调用后端删除接口
-      await fetch("http://127.0.0.1:8787/api/workspace/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-    } catch {
-      // 忽略网络错误
-    }
-    // 前端移除工作区并刷新会话
+    // 前端直接从工作区列表中移除，绝不删除物理磁盘上的任何文件
     onRemoveWorkspace(path);
     setFolderToDelete(null);
   }, [folderToDelete, onRemoveWorkspace]);
@@ -262,17 +253,17 @@ export function WorkspaceSidebar({
                       <PlusIcon className="size-3" />
                     </button>
 
-                    {/* 删除文件夹按钮 */}
+                    {/* 移除工作区文件夹按钮（仅取消关联，不删文件） */}
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setFolderToDelete({ path: group.folderPath, name: group.folderName });
                       }}
-                      className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 transition-colors"
-                      title={`删除文件夹 ${group.folderName}`}
+                      className="p-1 rounded text-zinc-500 hover:text-amber-400 hover:bg-zinc-800 transition-colors"
+                      title={`从工作区列表中移除 ${group.folderName}（不会删除磁盘文件）`}
                     >
-                      <Trash2Icon className="size-3" />
+                      <FolderMinusIcon className="size-3" />
                     </button>
                   </div>
                 </div>
@@ -372,17 +363,20 @@ export function WorkspaceSidebar({
         initialPath={selected ?? undefined}
       />
 
-      {/* 文件夹删除确认弹窗 */}
+      {/* 文件夹移除确认弹窗（仅从列表移除，绝不删除磁盘文件） */}
       {folderToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-[#09090b] p-5 shadow-2xl text-zinc-100 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center gap-2.5 text-amber-400 mb-2.5">
               <AlertTriangleIcon className="size-5 shrink-0" />
-              <h3 className="text-[14px] font-semibold text-zinc-100">确认删除文件夹？</h3>
+              <h3 className="text-[14px] font-semibold text-zinc-100">确认移除工作区？</h3>
             </div>
             <p className="text-[12.5px] text-zinc-400 leading-relaxed mb-4">
-              确定要删除工作区文件夹 <strong className="text-zinc-200">{folderToDelete.name}</strong> 吗？
-              这将移除其列表条目及关联的所有会话。
+              确定要将工作区 <strong className="text-zinc-200">{folderToDelete.name}</strong> 从列表中移除吗？
+              <br />
+              <span className="text-emerald-400 font-medium block mt-1">
+                ✓ 安全说明：此操作仅从工作台移除显示，绝不会删除您物理磁盘上的任何文件。
+              </span>
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -395,9 +389,9 @@ export function WorkspaceSidebar({
               <button
                 type="button"
                 onClick={() => void handleConfirmDeleteFolder()}
-                className="px-3 py-1.5 rounded-lg bg-rose-600 text-[12px] font-medium text-white hover:bg-rose-500"
+                className="px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-[12px] font-medium text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors"
               >
-                确认删除
+                确认移除
               </button>
             </div>
           </div>
