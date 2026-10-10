@@ -8,7 +8,7 @@
  * 4. 密钥掩码保存，安全合规，绝不外泄。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PROVIDER_TYPES,
   REASONING_EFFORTS,
@@ -23,7 +23,11 @@ import {
   Trash2Icon,
   CheckIcon,
   RefreshCwIcon,
+  SunIcon,
+  MoonIcon,
+  ChevronUpIcon,
 } from "lucide-react";
+import { cn } from "../../lib/utils.js";
 
 const TYPE_LABEL: Record<ProviderType, string> = {
   stepfun: "StepFun 阶跃星辰",
@@ -45,6 +49,10 @@ interface SettingsModalProps {
   draftFor: (type: ProviderType, label: string) => ProviderDraft;
   activeProviderId: string | null;
   onSelectProvider: (id: string | null) => void;
+  /** 当前外观主题 */
+  theme?: "dark" | "light";
+  /** 切换外观主题 */
+  onThemeChange?: (theme: "dark" | "light") => void;
 }
 
 export function SettingsModal(props: SettingsModalProps) {
@@ -64,6 +72,8 @@ export function SettingsModal(props: SettingsModalProps) {
           onTest={props.onTest}
           onAddModel={props.onAddModel}
           draftFor={props.draftFor}
+          theme={props.theme}
+          onThemeChange={props.onThemeChange}
         />
       ) : null}
     </Modal>
@@ -87,7 +97,21 @@ function draftFromProvider(provider: PublicProvider): ProviderDraft {
 
 /** 设置表单本体 */
 function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "loading">) {
-  const { providers } = props;
+  const { providers, theme = "dark", onThemeChange } = props;
+
+  // 外观上拉菜单状态
+  const [isThemeOpen, setIsThemeOpen] = useState(false);
+  const themeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (themeDropdownRef.current && !themeDropdownRef.current.contains(e.target as Node)) {
+        setIsThemeOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const [draft, setDraft] = useState<ProviderDraft>(() => {
     if (props.activeProviderId) {
@@ -300,6 +324,86 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
               <span>{TYPE_LABEL[type]}</span>
             </button>
           ))}
+        </div>
+
+        {/* 外观上拉选择（向上弹出切换浅色/深色背景） */}
+        <div className="pt-3 border-t border-zinc-800/60 relative mt-auto" ref={themeDropdownRef}>
+          <label className="block mb-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+            外观
+          </label>
+          <div className="relative">
+            <button
+              type="button"
+              data-testid="appearance-dropup-btn"
+              onClick={() => setIsThemeOpen((v) => !v)}
+              className="flex w-full items-center justify-between rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-[12.5px] text-zinc-200 hover:border-zinc-700 transition-colors"
+              title="切换外观背景颜色"
+            >
+              <div className="flex items-center gap-2">
+                {theme === "light" ? (
+                  <SunIcon className="size-3.5 text-amber-400" />
+                ) : (
+                  <MoonIcon className="size-3.5 text-blue-400" />
+                )}
+                <span>{theme === "light" ? "浅色" : "深色"}</span>
+              </div>
+              <ChevronUpIcon
+                className={cn(
+                  "size-3.5 text-zinc-500 transition-transform duration-150",
+                  isThemeOpen && "rotate-180 text-zinc-200",
+                )}
+              />
+            </button>
+
+            {/* 上拉选择菜单（向上弹出） */}
+            {isThemeOpen && (
+              <div
+                data-testid="appearance-dropup-menu"
+                className="absolute bottom-full mb-1 left-0 z-50 w-full rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100"
+              >
+                <button
+                  type="button"
+                  data-testid="theme-option-dark"
+                  onClick={() => {
+                    onThemeChange?.("dark");
+                    setIsThemeOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded px-2 py-1.5 text-[12px] transition-colors",
+                    theme === "dark"
+                      ? "bg-zinc-800 text-white font-medium"
+                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <MoonIcon className="size-3.5 text-blue-400" />
+                    <span>深色</span>
+                  </div>
+                  {theme === "dark" && <CheckIcon className="size-3 text-emerald-400" />}
+                </button>
+                <button
+                  type="button"
+                  data-testid="theme-option-light"
+                  onClick={() => {
+                    onThemeChange?.("light");
+                    setIsThemeOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded px-2 py-1.5 text-[12px] transition-colors",
+                    theme === "light"
+                      ? "bg-zinc-800 text-white font-medium"
+                      : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <SunIcon className="size-3.5 text-amber-400" />
+                    <span>浅色</span>
+                  </div>
+                  {theme === "light" && <CheckIcon className="size-3 text-emerald-400" />}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

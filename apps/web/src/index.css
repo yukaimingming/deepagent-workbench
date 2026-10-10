@@ -102,3 +102,97 @@ body,
     background-position: -100% center;
   }
 }
+
+/* ================= 浅色主题模式适配 (Light Theme) ================= */
+html.light,
+[data-theme="light"] {
+  --color-surface-0: #f8fafc;
+  --color-surface-1: #ffffff;
+  --color-surface-2: #f1f5f9;
+  --color-surface-3: #e2e8f0;
+  --color-border-subtle: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-muted: #64748b;
+  --color-foreground: #0f172a;
+  --color-muted-foreground: #64748b;
+  --color-input: #ffffff;
+  --color-ring: #cbd5e1;
+}
+
+html.light body,
+html.light #root {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* 核心容器与布局背景浅色切换 */
+html.light .bg-black {
+  background-color: #f8fafc !important;
+}
+html.light .bg-zinc-950,
+html.light .bg-zinc-950\/70,
+html.light .bg-zinc-950\/60 {
+  background-color: #ffffff !important;
+}
+html.light .bg-zinc-900,
+html.light .bg-zinc-900\/80,
+html.light .bg-zinc-900\/90,
+html.light .bg-zinc-900\/60 {
+  background-color: #f1f5f9 !important;
+}
+html.light .bg-\[\#09090b\],
+html.light .bg-\[\#0c0c0e\],
+html.light .bg-\[\#121214\] {
+  background-color: #ffffff !important;
+}
+
+/* 文本颜色切换 */
+html.light .text-zinc-100,
+html.light .text-zinc-200,
+html.light .text-white {
+  color: #0f172a !important;
+}
+html.light .text-zinc-300,
+html.light .text-zinc-400 {
+  color: #334155 !important;
+}
+html.light .text-zinc-500 {
+  color: #64748b !important;
+}
+
+/* 边框切换 */
+html.light .border-zinc-800,
+html.light .border-zinc-800\/80,
+html.light .border-zinc-800\/60,
+html.light .border-zinc-800\/40,
+html.light .border-zinc-700,
+html.light .border-zinc-700\/60 {
+  border-color: #e2e8f0 !important;
+}
+
+/* 悬浮状态适配 */
+html.light .hover\:bg-zinc-800:hover {
+  background-color: #e2e8f0 !important;
+}
+html.light .hover\:bg-zinc-900:hover,
+html.light .hover\:bg-zinc-900\/60:hover {
+  background-color: #f1f5f9 !important;
+}
+html.light .hover\:text-white:hover,
+html.light .hover\:text-zinc-200:hover {
+  color: #0f172a !important;
+}
+
+/* 提示框与弹窗浅色适配 */
+html.light [data-slot="tooltip-content"] {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1) !important;
+}
+html.light [data-slot="tooltip-content"] p {
+  color: #0f172a !important;
+}
+

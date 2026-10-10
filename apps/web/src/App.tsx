@@ -21,6 +21,7 @@ import { ChatInput } from "./features/chat/chat-input.js";
 import { WorkspaceSidebar } from "./features/chat/workspace-sidebar.js";
 import { SettingsModal } from "./features/settings/settings-modal.js";
 import { useProviderSettings } from "./features/settings/use-provider-settings.js";
+import { useTheme } from "./features/settings/use-theme.js";
 import { useSessions, normalizePath } from "./features/chat/use-sessions.js";
 import { FolderPickerModal } from "./features/chat/folder-picker-modal.js";
 import { PanelLeftIcon, AlertCircleIcon } from "lucide-react";
@@ -32,6 +33,7 @@ const AGENT_URL = "/agent";
 
 export function App() {
   const settings = useProviderSettings();
+  const { theme, setTheme } = useTheme();
   const {
     state,
     isRunning,
@@ -485,6 +487,8 @@ export function App() {
         draftFor={settings.draftFor}
         activeProviderId={settings.activeProviderId}
         onSelectProvider={settings.setActiveProviderId}
+        theme={theme}
+        onThemeChange={setTheme}
       />
     </div>
   );

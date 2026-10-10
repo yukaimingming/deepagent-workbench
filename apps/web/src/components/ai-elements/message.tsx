@@ -99,8 +99,8 @@ export const MessageAction = ({
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
-          <TooltipContent>
-            <p>{tooltip}</p>
+          <TooltipContent className="border border-zinc-800 bg-[#121214] text-zinc-200 shadow-xl">
+            <p className="text-xs text-zinc-200">{tooltip}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
