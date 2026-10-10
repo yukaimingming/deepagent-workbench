@@ -49,7 +49,7 @@ export interface AdapterContext {
 export type EventSink = (event: BaseEvent) => void;
 
 /** 运行快照的最小发送间隔（毫秒）：模型思考期间 chunk 很密，节流省带宽。 */
-const SNAPSHOT_THROTTLE_MS = 800;
+const _SNAPSHOT_THROTTLE_MS = 800;
 
 /** 把文件工具名映射为前端展示的操作类型。 */
 const FILE_TOOLS: Record<string, "read" | "write" | "edit" | "delete" | "list" | "grep" | "glob"> = {
@@ -415,7 +415,7 @@ export class DeepAgentToAguiAdapter {
   async consumeValues(run: DeepAgentRunStream): Promise<void> {
     let lastTodoSignature = "";
     /** 已发过卡片的 tool_call id，避免重复。 */
-    const seenCalls = new Set<string>();
+    const _seenCalls = new Set<string>();
 
     for await (const values of run.values) {
       if (process.env.DEEPAGENT_DEBUG_VALUES === "1") {
@@ -713,7 +713,7 @@ export function sanitizeReasoning(raw: string): string {
 }
 
 /** 截断文本到指定长度。 */
-function truncate(text: string, limit: number): string {
+function _truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
 

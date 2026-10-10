@@ -56,6 +56,8 @@ interface WorkspaceSidebarProps {
   onAddWorkspace: (path: string) => void;
   /** 移除工作区文件夹 */
   onRemoveWorkspace: (path: string) => void;
+  /** 打开文件夹选择弹窗回调 */
+  onOpenFolderPicker?: () => void;
   serverUrl?: string;
 }
 
@@ -73,6 +75,7 @@ export function WorkspaceSidebar({
   onOpenSettings,
   onAddWorkspace,
   onRemoveWorkspace,
+  onOpenFolderPicker,
 }: WorkspaceSidebarProps) {
   // 控制“选择工作区文件夹”弹窗
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -137,7 +140,7 @@ export function WorkspaceSidebar({
             {/* 添加文件夹按钮（弹窗选择） */}
             <button
               type="button"
-              onClick={() => setIsFolderPickerOpen(true)}
+              onClick={() => (onOpenFolderPicker ? onOpenFolderPicker() : setIsFolderPickerOpen(true))}
               className="flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
               title="添加工作区文件夹（弹窗浏览选择）"
             >

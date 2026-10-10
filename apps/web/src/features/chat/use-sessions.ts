@@ -31,16 +31,22 @@ export interface FolderGroup {
   sessions: SessionSummary[];
 }
 
+/** 规范化路径用于对比。 */
+export function normalizePath(p: string): string {
+  if (!p) return "";
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 /** 从路径提取文件夹名称。 */
 export function extractFolderName(pathStr: string): string {
-  if (!pathStr || pathStr.trim().length === 0) return "默认工作区";
+  if (!pathStr || pathStr.trim().length === 0) return "直接聊天";
   const normalized = pathStr.replace(/\\/g, "/").replace(/\/+$/, "");
   const parts = normalized.split("/");
   return parts[parts.length - 1] || normalized;
 }
 
 /** 初始空会话。 */
-function createNewSessionSummary(id: string, workspaceRoot: string = "workspace"): SessionSummary {
+function createNewSessionSummary(id: string, workspaceRoot: string = ""): SessionSummary {
   return {
     id,
     title: "新对话",
@@ -52,21 +58,21 @@ function createNewSessionSummary(id: string, workspaceRoot: string = "workspace"
   };
 }
 
-export function useSessions(initialThreadId: string, defaultWorkspace: string = "workspace") {
+export function useSessions(initialThreadId: string, defaultWorkspace: string = "") {
   // 自定义添加的工作区文件夹路径列表
   const [customWorkspaces, setCustomWorkspaces] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem(WORKSPACES_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as string[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter((p) => p && typeof p === "string" && p.trim().length > 0);
         }
       }
     } catch {
       // 忽略存储读取异常
     }
-    return [defaultWorkspace];
+    return defaultWorkspace ? [defaultWorkspace] : [];
   });
 
   const [sessions, setSessions] = useState<SessionSummary[]>(() => {
@@ -111,14 +117,41 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
     const trimmed = folderPath.trim();
     if (!trimmed) return;
     setCustomWorkspaces((prev) => {
-      if (prev.includes(trimmed)) return prev;
+      const targetNorm = normalizePath(trimmed);
+      if (prev.some((p) => normalizePath(p) === targetNorm)) return prev;
       return [...prev, trimmed];
     });
   }, []);
 
-  /** 移除工作区文件夹。 */
+  /** 彻底移除工作区文件夹，并将其下关联的会话重置为直接聊天模式。 */
   const removeWorkspace = useCallback((folderPath: string) => {
-    setCustomWorkspaces((prev) => prev.filter((p) => p !== folderPath));
+    const targetNorm = normalizePath(folderPath);
+    const targetName = extractFolderName(folderPath).toLowerCase();
+
+    // 1. 从 customWorkspaces 彻底移除
+    setCustomWorkspaces((prev) =>
+      prev.filter((p) => {
+        const pNorm = normalizePath(p);
+        const pName = extractFolderName(p).toLowerCase();
+        return pNorm !== targetNorm && pName !== targetName && p !== folderPath;
+      }),
+    );
+
+    // 2. 将关联属于该工作区的所有会话，workspaceRoot 置为空 ""（迁移为直接聊天模式）
+    setSessions((prev) =>
+      prev.map((s) => {
+        const sNorm = normalizePath(s.workspaceRoot);
+        const sName = extractFolderName(s.workspaceRoot).toLowerCase();
+        if (sNorm === targetNorm || sName === targetName || s.workspaceRoot === folderPath) {
+          return {
+            ...s,
+            workspaceRoot: "",
+            folderName: "直接聊天",
+          };
+        }
+        return s;
+      }),
+    );
   }, []);
 
   /** 读取指定会话的完整状态。 */
@@ -136,7 +169,7 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
 
   /** 保存指定会话的完整状态并同步会话摘要。 */
   const saveSessionState = useCallback(
-    (id: string, state: ClientState, workspaceRoot: string = defaultWorkspace) => {
+    (id: string, state: ClientState, workspaceRoot: string = "") => {
       try {
         localStorage.setItem(`${SESSION_STATE_PREFIX}${id}`, JSON.stringify(state));
       } catch {
@@ -153,7 +186,7 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
         }
 
         const now = Date.now();
-        const root = workspaceRoot || defaultWorkspace;
+        const root = workspaceRoot ?? "";
         const folder = extractFolderName(root);
 
         if (index >= 0) {
@@ -192,16 +225,16 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
         return [newSummary, ...prev];
       });
     },
-    [defaultWorkspace],
+    [],
   );
 
   /** 新建会话。 */
-  const createSession = useCallback((newId: string, workspaceRoot: string = defaultWorkspace): string => {
+  const createSession = useCallback((newId: string, workspaceRoot: string = ""): string => {
     const summary = createNewSessionSummary(newId, workspaceRoot);
     setSessions((prev) => [summary, ...prev.filter((s) => s.id !== newId)]);
     setActiveSessionId(newId);
     return newId;
-  }, [defaultWorkspace]);
+  }, []);
 
   /** 删除会话。 */
   const removeSession = useCallback((id: string) => {
@@ -227,7 +260,7 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
     return sessions.find((s) => s.id === activeSessionId) ?? sessions[0];
   }, [sessions, activeSessionId]);
 
-  /** 按工作区文件夹分组后的会话列表（做严格名称与路径去重，绝对杜绝重复的workspace节点）。 */
+  /** 按工作区文件夹分组后的会话列表（仅允许有效工作区，绝不复活已删除文件夹）。 */
   const groupedSessions = useMemo((): FolderGroup[] => {
     // 文件夹名称Key -> { canonicalPath, sessions }
     const groupMap = new Map<string, { canonicalPath: string; sessions: SessionSummary[] }>();
@@ -235,11 +268,9 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
     const registerFolder = (rawPath: string) => {
       const trimmed = rawPath.trim();
       if (!trimmed) return;
-      // 提取文件夹纯名称作为去重 Key（例如 "workspace"、"aiagent"、"desktop"）
       const nameKey = extractFolderName(trimmed).toLowerCase();
       const existing = groupMap.get(nameKey);
       if (existing) {
-        // 优先保留具有盘符/更长路径的完整绝对路径
         if (trimmed.length > existing.canonicalPath.length) {
           existing.canonicalPath = trimmed;
         }
@@ -248,29 +279,54 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
       }
     };
 
-    // 1. 严格按 customWorkspaces 的固定顺序注册文件夹，绝对不因当前选中的工作区改变顺序！
+    // 1. 严格仅注册 customWorkspaces 里的有效文件夹
     for (const ws of customWorkspaces) {
-      registerFolder(ws);
-    }
-    if (!groupMap.has("workspace")) {
-      registerFolder(defaultWorkspace || "workspace");
-    }
-
-    // 2. 将会话归类到对应工作区（若有外部工作区则稳定追加至末尾）
-    for (const session of sessions) {
-      const root = session.workspaceRoot || defaultWorkspace || "workspace";
-      const nameKey = extractFolderName(root).toLowerCase();
-      let target = groupMap.get(nameKey);
-      if (!target) {
-        target = { canonicalPath: root, sessions: [] };
-        groupMap.set(nameKey, target);
+      if (ws && ws.trim()) {
+        registerFolder(ws);
       }
-      target.sessions.push(session);
     }
 
-    // 3. 生成最终的 FolderGroup 列表：
-    // 会话列表按固定的创建时间（createdAt）排序，创建后位置固定，不会因点击选择而变动跑第一位置
+    // 2. 收集无工作区（直接聊天模式）或所属工作区已被移除的会话
+    const directChatSessions: SessionSummary[] = [];
+
+    // 3. 将会话归类：仅归入当前合法的工作区分组中；绝不复活已被删除的工作区
+    for (const session of sessions) {
+      const root = session.workspaceRoot ? session.workspaceRoot.trim() : "";
+      if (!root) {
+        directChatSessions.push(session);
+        continue;
+      }
+      const nameKey = extractFolderName(root).toLowerCase();
+      const target = groupMap.get(nameKey);
+      if (target) {
+        target.sessions.push(session);
+      } else {
+        // 所属工作区已不存在，安全归入直接聊天列表
+        directChatSessions.push({
+          ...session,
+          workspaceRoot: "",
+          folderName: "直接聊天",
+        });
+      }
+    }
+
+    // 4. 生成最终分组列表
     const groups: FolderGroup[] = [];
+
+    // 若有直接聊天会话，或者当前无任何工作区文件夹，提供直接聊天分组
+    if (directChatSessions.length > 0 || groupMap.size === 0) {
+      groups.push({
+        folderPath: "",
+        folderName: "直接聊天",
+        sessions: directChatSessions.sort((a, b) => {
+          const timeA = a.createdAt || a.updatedAt || 0;
+          const timeB = b.createdAt || b.updatedAt || 0;
+          return timeB - timeA;
+        }),
+      });
+    }
+
+    // 遍历各合法工作区
     for (const { canonicalPath, sessions: sessionList } of groupMap.values()) {
       groups.push({
         folderPath: canonicalPath,
@@ -282,8 +338,9 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
         }),
       });
     }
+
     return groups;
-  }, [customWorkspaces, defaultWorkspace, sessions]);
+  }, [customWorkspaces, sessions]);
 
   return {
     sessions,

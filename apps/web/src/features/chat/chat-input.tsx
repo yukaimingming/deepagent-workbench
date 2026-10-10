@@ -14,6 +14,9 @@ import {
   CheckIcon,
   SettingsIcon,
   BrainIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  MessageSquareIcon,
 } from "lucide-react";
 import {
   PromptInput,
@@ -27,6 +30,7 @@ import {
 } from "../../components/ai-elements/prompt-input.js";
 import { REASONING_EFFORTS, type ReasoningEffort } from "@deepagent/shared";
 import { cn } from "../../lib/utils.js";
+import { extractFolderName } from "./use-sessions.js";
 
 interface ChatInputProps {
   onSend: (content: string) => void;
@@ -48,6 +52,14 @@ interface ChatInputProps {
   onSelectModel?: (model: string) => void;
   /** 打开模型设置模态框 */
   onOpenSettings?: () => void;
+  /** 当前工作区根目录（若为空或 null 则为直接聊天模式） */
+  workspaceRoot?: string | null;
+  /** 已添加的工作区列表 */
+  customWorkspaces?: string[];
+  /** 选择工作区或切换至直接聊天模式（传 null） */
+  onSelectWorkspace?: (path: string | null) => void;
+  /** 打开系统文件夹选择器弹窗 */
+  onOpenFolderPicker?: () => void;
 }
 
 export function ChatInput({
@@ -64,8 +76,16 @@ export function ChatInput({
   currentModel,
   onSelectModel,
   onOpenSettings,
+  workspaceRoot,
+  customWorkspaces = [],
+  onSelectWorkspace,
+  onOpenFolderPicker,
 }: ChatInputProps) {
   const [text, setText] = useState("");
+
+  // 工作区下拉选择状态
+  const [isWorkspaceDropdownOpen, setIsWorkspaceDropdownOpen] = useState(false);
+  const workspaceDropdownRef = useRef<HTMLDivElement>(null);
 
   // 模型下拉菜单状态
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
@@ -79,6 +99,9 @@ export function ChatInput({
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
+      if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(target)) {
+        setIsWorkspaceDropdownOpen(false);
+      }
       if (modelDropdownRef.current && !modelDropdownRef.current.contains(target)) {
         setIsModelDropdownOpen(false);
       }
@@ -102,9 +125,164 @@ export function ChatInput({
 
   const effortLabel = effort === "high" ? "高" : effort === "medium" ? "中" : "低";
 
+  const isDirectChat = !workspaceRoot || workspaceRoot.trim() === "";
+  const currentWorkspaceName = isDirectChat ? "直接聊天模式" : extractFolderName(workspaceRoot);
+  const currentWorkspacePath = isDirectChat ? "" : workspaceRoot;
+
   return (
     <div className="shrink-0 bg-black px-4 py-4">
       <div className="mx-auto w-full max-w-3xl">
+        {/* ================= 提示词输入框上方对齐的工作区选择栏 ================= */}
+        <div className="relative mb-2 w-full" ref={workspaceDropdownRef}>
+          <button
+            type="button"
+            data-testid="workspace-mode-selector"
+            onClick={() => {
+              setIsWorkspaceDropdownOpen((v) => !v);
+              setIsModelDropdownOpen(false);
+              setIsEffortDropdownOpen(false);
+            }}
+            className="group flex w-full items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/70 px-3 py-1.5 text-[12.5px] text-zinc-300 hover:border-zinc-700/80 hover:bg-zinc-900/60 transition-all select-none"
+            title={isDirectChat ? "当前为直接聊天模式（无工作区）" : `当前工作区：${currentWorkspacePath}`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              {isDirectChat ? (
+                <>
+                  <span className="flex size-5 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-400 shrink-0">
+                    <MessageSquareIcon className="size-3" />
+                  </span>
+                  <span className="font-medium text-zinc-200">直接聊天模式</span>
+                  <span className="text-[11px] text-zinc-500 truncate">（不在工作区，不访问本地文件）</span>
+                </>
+              ) : (
+                <>
+                  <span className="flex size-5 items-center justify-center rounded-md bg-amber-500/10 text-amber-400 shrink-0">
+                    <FolderIcon className="size-3" />
+                  </span>
+                  <span className="font-medium text-zinc-200 truncate">
+                    工作区: {currentWorkspaceName}
+                  </span>
+                  <span className="text-[11px] font-mono text-zinc-500 truncate max-w-[340px]">
+                    ({currentWorkspacePath})
+                  </span>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0 ml-2 text-zinc-400">
+              <span className="text-[11px] text-zinc-500 group-hover:text-zinc-400 transition-colors">切换工作区/模式</span>
+              <ChevronDownIcon
+                className={cn(
+                  "size-3.5 transition-transform duration-200",
+                  isWorkspaceDropdownOpen && "rotate-180 text-zinc-200",
+                )}
+              />
+            </div>
+          </button>
+
+          {/* 下拉菜单面板 */}
+          {isWorkspaceDropdownOpen && (
+            <div className="absolute left-0 bottom-full mb-1.5 z-50 w-full rounded-xl border border-zinc-800 bg-[#0c0c0e] p-1.5 shadow-2xl backdrop-blur animate-in fade-in zoom-in-95 duration-150">
+              {/* 选项 1：单纯的不在工作区直接聊天模式 */}
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectWorkspace?.(null);
+                  setIsWorkspaceDropdownOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors",
+                  isDirectChat
+                    ? "bg-zinc-900 text-zinc-100 font-medium"
+                    : "text-zinc-300 hover:bg-zinc-900/60 hover:text-white",
+                )}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="flex size-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-400 shrink-0">
+                    <MessageSquareIcon className="size-3.5" />
+                  </span>
+                  <div>
+                    <div className="text-[12.5px] font-medium text-zinc-200">直接聊天模式 (无工作区)</div>
+                    <div className="text-[11px] text-zinc-500">纯对话与代码解答，不绑定或访问物理工作区文件夹</div>
+                  </div>
+                </div>
+                {isDirectChat && <CheckIcon className="size-4 text-emerald-400 shrink-0" />}
+              </button>
+
+              {/* 分割线 */}
+              <div className="my-1 h-px bg-zinc-800/80" />
+
+              {/* 工作区列表标题 */}
+              <div className="px-2.5 py-1 text-[11px] font-medium text-zinc-500">选择已有工作区</div>
+
+              {/* 选项 2..N：各工作区文件夹 */}
+              <div className="max-h-[180px] overflow-y-auto space-y-0.5 scrollbar-thin scrollbar-thumb-zinc-800">
+                {customWorkspaces && customWorkspaces.length > 0 ? (
+                  customWorkspaces.map((wsPath) => {
+                    const isSelected =
+                      !isDirectChat &&
+                      (currentWorkspacePath === wsPath ||
+                        currentWorkspacePath.toLowerCase() === wsPath.toLowerCase());
+                    const name = extractFolderName(wsPath);
+                    return (
+                      <button
+                        key={wsPath}
+                        type="button"
+                        onClick={() => {
+                          onSelectWorkspace?.(wsPath);
+                          setIsWorkspaceDropdownOpen(false);
+                        }}
+                        className={cn(
+                          "flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors",
+                          isSelected
+                            ? "bg-zinc-900 text-zinc-100 font-medium"
+                            : "text-zinc-300 hover:bg-zinc-900/60 hover:text-white",
+                        )}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="flex size-6 items-center justify-center rounded-md bg-amber-500/10 text-amber-400 shrink-0">
+                            <FolderIcon className="size-3.5" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-[12px] font-medium text-zinc-200 truncate">{name}</div>
+                            <div className="text-[10.5px] font-mono text-zinc-500 truncate" title={wsPath}>
+                              {wsPath}
+                            </div>
+                          </div>
+                        </div>
+                        {isSelected && <CheckIcon className="size-4 text-amber-400 shrink-0 ml-2" />}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="px-2.5 py-1.5 text-[11.5px] text-zinc-500 italic">暂无添加的工作区</div>
+                )}
+              </div>
+
+              {/* 分割线 */}
+              <div className="my-1 h-px bg-zinc-800/80" />
+
+              {/* 选项：打开文件夹新建工作区 */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsWorkspaceDropdownOpen(false);
+                  onOpenFolderPicker?.();
+                }}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-300 hover:bg-zinc-900/60 hover:text-white transition-colors"
+              >
+                <span className="flex size-6 items-center justify-center rounded-md bg-blue-500/10 text-blue-400 shrink-0">
+                  <FolderPlusIcon className="size-3.5" />
+                </span>
+                <div>
+                  <div className="text-[12.5px] font-medium text-zinc-200">打开文件夹新建工作区...</div>
+                  <div className="text-[11px] text-zinc-500">浏览系统目录并添加为新的工作区</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+
         <PromptInputProvider>
           {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
           <PromptInput

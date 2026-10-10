@@ -97,6 +97,7 @@ export function FolderPickerModal({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadDirectory(initialPath);
     }
   }, [open, initialPath, loadDirectory]);

@@ -9,7 +9,7 @@
  * 5. 去掉右上角模型设置杂项
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   availableEffortsForModel,
   resolveEffortForModel,
@@ -21,45 +21,14 @@ import { ChatInput } from "./features/chat/chat-input.js";
 import { WorkspaceSidebar } from "./features/chat/workspace-sidebar.js";
 import { SettingsModal } from "./features/settings/settings-modal.js";
 import { useProviderSettings } from "./features/settings/use-provider-settings.js";
-import { useSessions } from "./features/chat/use-sessions.js";
+import { useSessions, normalizePath } from "./features/chat/use-sessions.js";
+import { FolderPickerModal } from "./features/chat/folder-picker-modal.js";
 import { PanelLeftIcon, AlertCircleIcon } from "lucide-react";
 
 /** AG-UI 服务端地址：走代理或直接连接。 */
 const AGENT_URL = "/agent";
 
-interface ServerInfo {
-  workspaceRoot: string;
-  shellEnabled: boolean;
-  approvalRequired: boolean;
-}
 
-function useServerInfo(): ServerInfo | null {
-  const [info, setInfo] = useState<ServerInfo | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch("/api/health");
-        if (!response.ok) return;
-        const body = (await response.json()) as Partial<ServerInfo>;
-        if (cancelled) return;
-        if (typeof body.workspaceRoot === "string") {
-          setInfo({
-            workspaceRoot: body.workspaceRoot,
-            shellEnabled: body.shellEnabled === true,
-            approvalRequired: body.approvalRequired !== false,
-          });
-        }
-      } catch {
-        // 静默失败
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return info;
-}
 
 export function App() {
   const settings = useProviderSettings();
@@ -82,7 +51,6 @@ export function App() {
   } = useAgentClient(AGENT_URL);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const serverInfo = useServerInfo();
 
   // 侧边栏折叠/展开
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
@@ -106,18 +74,46 @@ export function App() {
     });
   };
 
-  /** 当前工作区目录。 */
-  const [workspaceRoot, setWorkspaceRoot] = useState<string>("workspace");
+  /** 当前工作区目录。若为 null 则表示单纯不在工作区的直接聊天模式。 */
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem("deepagent_current_workspace_v3");
+      if (saved !== null) {
+        return saved === "DIRECT_CHAT" ? null : saved;
+      }
+    } catch {
+      // 忽略
+    }
+    return null;
+  });
 
-  // 服务端信息到位后更新默认工作区
+  // 持久化当前选中的工作区模式
   useEffect(() => {
-    if (!serverInfo?.workspaceRoot) return;
-    setWorkspaceRoot((cur) => (cur === "workspace" ? serverInfo.workspaceRoot : cur));
-  }, [serverInfo?.workspaceRoot]);
+    try {
+      if (workspaceRoot === null || workspaceRoot.trim() === "") {
+        localStorage.setItem("deepagent_current_workspace_v3", "DIRECT_CHAT");
+      } else {
+        localStorage.setItem("deepagent_current_workspace_v3", workspaceRoot);
+      }
+    } catch {
+      // 忽略
+    }
+  }, [workspaceRoot]);
 
   // 会话管理器
-  const sessionsManager = useSessions(state.threadId, workspaceRoot);
-  const { saveSessionState } = sessionsManager;
+  const sessionsManager = useSessions(state.threadId, workspaceRoot ?? "");
+  const {
+    sessions,
+    groupedSessions,
+    removeSession,
+    saveSessionState,
+    customWorkspaces,
+    addWorkspace,
+    removeWorkspace,
+  } = sessionsManager;
+
+  // 文件夹选择器弹窗状态
+  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
 
   // 会话列表的权威副本：自动保存时用来取每个会话自己的 workspaceRoot，
   // 放进 ref 是为了避免「保存 → sessions 变化 → 再次保存」的循环。
@@ -138,7 +134,7 @@ export function App() {
         if (threadState.messages.length === 0 && threadState.activities.length === 0) continue;
         const sessionWorkspace =
           sessionsRef.current.find((session) => session.id === threadId)?.workspaceRoot ??
-          workspaceRoot;
+          (workspaceRoot ?? "");
         saveSessionState(threadId, threadState, sessionWorkspace);
       }
     }, 200);
@@ -199,27 +195,73 @@ export function App() {
   };
 
   // 新建会话
-  const handleNewSession = (targetWorkspace?: string) => {
-    const ws = targetWorkspace ?? workspaceRoot;
-    setWorkspaceRoot(ws);
-    // 如果当前已经是空会话，直接复用当前对话，不重复向列表追加多余的「新对话」
-    if (state.messages.length === 0 && state.activities.length === 0) {
-      sessionsManager.setActiveSessionId(state.threadId);
-      return;
-    }
-    // 保存当前会话
-    if (state.messages.length > 0 || state.activities.length > 0) {
-      saveSessionState(state.threadId, state, workspaceRoot);
-    }
-    const newSessionId = cryptoRandomId();
-    // 只切换当前视图：旧会话若正在执行，会在后台继续跑完，互不影响。
-    newThread(newSessionId);
-    sessionsManager.createSession(newSessionId, ws);
-  };
+  const handleNewSession = useCallback(
+    (targetWorkspace?: string | null) => {
+      const ws = targetWorkspace !== undefined ? targetWorkspace : workspaceRoot;
+      setWorkspaceRoot(ws ?? null);
+      // 如果当前已经是空会话，直接复用当前对话，不重复向列表追加多余的「新对话」
+      if (state.messages.length === 0 && state.activities.length === 0) {
+        sessionsManager.setActiveSessionId(state.threadId);
+        return;
+      }
+      // 保存当前会话
+      if (state.messages.length > 0 || state.activities.length > 0) {
+        saveSessionState(state.threadId, state, workspaceRoot ?? "");
+      }
+      const newSessionId = cryptoRandomId();
+      // 只切换当前视图：旧会话若正在执行，会在后台继续跑完，互不影响。
+      newThread(newSessionId);
+      sessionsManager.createSession(newSessionId, ws ?? "");
+    },
+    [workspaceRoot, state, sessionsManager, saveSessionState, newThread],
+  );
+
+  // 文件夹选择器完成选择
+  const handleFolderPicked = useCallback(
+    async (pickedPath: string) => {
+      const trimmed = pickedPath.trim();
+      if (!trimmed) return;
+      try {
+        await fetch("http://127.0.0.1:8787/api/workspace/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: trimmed }),
+        });
+      } catch {
+        // 忽略
+      }
+      addWorkspace(trimmed);
+      setWorkspaceRoot(trimmed);
+      handleNewSession(trimmed);
+      setIsFolderPickerOpen(false);
+    },
+    [addWorkspace, handleNewSession],
+  );
+
+  // 移除工作区文件夹
+  const handleRemoveWorkspace = useCallback(
+    (folderPath: string) => {
+      removeWorkspace(folderPath);
+      // 若当前选中的正好是被移除的工作区，平滑切换到其他工作区或直接聊天模式
+      setWorkspaceRoot((cur) => {
+        if (!cur) return null;
+        if (cur === folderPath || normalizePath(cur) === normalizePath(folderPath)) {
+          const remaining = customWorkspaces.filter(
+            (w) => w !== folderPath && normalizePath(w) !== normalizePath(folderPath),
+          );
+          return remaining[0] ?? null;
+        }
+        return cur;
+      });
+    },
+    [removeWorkspace, customWorkspaces],
+  );
 
   // 切换会话
   const handleSelectSession = (id: string) => {
     if (id === state.threadId) return;
+    const sessionWorkspace = sessionsRef.current.find((s) => s.id === id)?.workspaceRoot;
+    setWorkspaceRoot(sessionWorkspace ? sessionWorkspace : null);
     // 目标会话若已在内存中（尤其是正在后台执行的），直接切过去看实时状态，
     // 绝不能用磁盘快照覆盖它。
     if (hasThread(id)) {
@@ -229,7 +271,7 @@ export function App() {
     }
     // 切换前先保存当前对话
     if (state.messages.length > 0 || state.activities.length > 0) {
-      saveSessionState(state.threadId, state, workspaceRoot);
+      saveSessionState(state.threadId, state, workspaceRoot ?? "");
     }
     const saved = sessionsManager.loadSessionState(id);
     if (saved) {
@@ -289,7 +331,7 @@ export function App() {
   const hasDecisions = Object.keys(state.pendingDecisions).length > 0;
   const pendingInterrupts = state.run.interrupts;
 
-  const currentSession = sessionsManager.sessions.find((s) => s.id === state.threadId);
+  const currentSession = sessions.find((s) => s.id === state.threadId);
   const currentTitle = currentSession?.title || "新对话";
 
   return (
@@ -299,21 +341,22 @@ export function App() {
         isOpen={isSidebarOpen}
         onToggle={toggleSidebar}
         selected={workspaceRoot}
-        onSelect={setWorkspaceRoot}
+        onSelect={(path) => setWorkspaceRoot(path)}
         onNewSession={handleNewSession}
-        sessions={sessionsManager.sessions}
-        groupedSessions={sessionsManager.groupedSessions}
+        sessions={sessions}
+        groupedSessions={groupedSessions}
         activeSessionId={state.threadId}
         runningSessionIds={runningThreadIds}
         onSelectSession={handleSelectSession}
         onRemoveSession={(id) => {
-          sessionsManager.removeSession(id);
+          removeSession(id);
           // 释放该会话的运行时（会中止其后台运行并切换到其它可用会话）。
           disposeThread(id);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
-        onAddWorkspace={sessionsManager.addWorkspace}
-        onRemoveWorkspace={sessionsManager.removeWorkspace}
+        onAddWorkspace={addWorkspace}
+        onRemoveWorkspace={handleRemoveWorkspace}
+        onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
       />
 
       {/* 右侧主聊天区 */}
@@ -390,7 +433,7 @@ export function App() {
             </div>
           ) : null}
 
-          {/* 底部输入框（支持模型下拉选择与思考等级） */}
+          {/* 底部输入框（支持输入框上方对齐的工作区下拉选择、模型下拉选择与思考等级） */}
           <ChatInput
             onSend={handleSend}
             onStop={() => void stop()}
@@ -407,9 +450,26 @@ export function App() {
             currentModel={currentModelId}
             onSelectModel={(model: string) => settings.setActiveModelId(model)}
             onOpenSettings={() => setSettingsOpen(true)}
+            workspaceRoot={workspaceRoot}
+            customWorkspaces={customWorkspaces}
+            onSelectWorkspace={(path) => {
+              setWorkspaceRoot(path);
+              if (state.messages.length === 0 && state.activities.length === 0) {
+                saveSessionState(state.threadId, state, path ?? "");
+              }
+            }}
+            onOpenFolderPicker={() => setIsFolderPickerOpen(true)}
           />
         </section>
       </div>
+
+      {/* 文件夹选择弹窗 */}
+      <FolderPickerModal
+        open={isFolderPickerOpen}
+        onClose={() => setIsFolderPickerOpen(false)}
+        onSelect={handleFolderPicked}
+        initialPath={workspaceRoot || undefined}
+      />
 
       {/* 模型设置弹窗 */}
       <SettingsModal

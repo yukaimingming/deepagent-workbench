@@ -1,7 +1,8 @@
 import { ChatOpenAI } from "@langchain/openai";
 import fs from "fs";
+import { resolve } from "path";
 
-const cfg = JSON.parse(fs.readFileSync(".data/providers.json", "utf8")).providers[0];
+const cfg = JSON.parse(fs.readFileSync(resolve("../../.data/providers.json"), "utf8")).providers[0];
 
 const model = new ChatOpenAI({
   model: cfg.defaultModel,
@@ -12,7 +13,7 @@ const model = new ChatOpenAI({
   streaming: true,
 });
 
-console.log("正在发起 StepFun 流式调用...");
+console.log("正在发起 StepFun 流式调用: model=" + cfg.defaultModel);
 const start = Date.now();
 const stream = await model.stream("请用 50 字以内思考并回答：你是什么模型？");
 

@@ -19,7 +19,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { EventEncoder } from "@ag-ui/encoder";
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";

@@ -15,7 +15,7 @@
  * 6. 人工安全审批与纯净 Markdown 渲染。
  */
 
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -86,8 +86,8 @@ function decisionFor(
 export function ChatMessages({
   messages,
   activities,
-  error,
-  isRunning = false,
+  error: _error,
+  isRunning: _isRunning = false,
   onRetry,
   onEditMessage,
   onDecide,
@@ -95,11 +95,11 @@ export function ChatMessages({
   onQuickPrompt,
 }: ChatMessagesProps) {
   // 待办计划任务
-  const todoActivity = activities.find((activity) => activity.kind === "todo");
+  const _todoActivity = activities.find((activity) => activity.kind === "todo");
   // 人工审批活动
   const approvals = activities.filter((activity) => activity.kind === "approval");
   // 工具调用卡片
-  const toolActivities = useMemo(() => {
+  const _toolActivities = useMemo(() => {
     return activities.filter((activity) => activity.kind === "tool");
   }, [activities]);
 
@@ -137,12 +137,40 @@ export function ChatMessages({
             <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-300 shadow-inner">
               <SparklesIcon className="size-6 text-zinc-100" />
             </div>
-            <h2 className="mb-2 text-lg font-semibold text-zinc-100">
-              DeepAgent 桌面工作台
-            </h2>
-            <p className="mb-6 max-w-md text-[13px] text-zinc-500">
-              基于 LangChain Deep Agents 与 AI SDK Elements 构建。支持任务分解队列、Shell终端命令、文件工具、子智能体与可控推理。
-            </p>
+            {(() => {
+              const hour = new Date().getHours();
+              let greetingTitle: string;
+              let greetingDesc: string;
+              if (hour >= 5 && hour < 9) {
+                greetingTitle = "早上好呀！";
+                greetingDesc = "新的一天开始啦，今天想一起做些什么呢？";
+              } else if (hour >= 9 && hour < 12) {
+                greetingTitle = "上午好！";
+                greetingDesc = "保持专注与好心情，有什么任务或灵感随时告诉我。";
+              } else if (hour >= 12 && hour < 14) {
+                greetingTitle = "中午好！";
+                greetingDesc = "忙碌了一上午，记得适度休息、按时吃顿午餐哦。";
+              } else if (hour >= 14 && hour < 18) {
+                greetingTitle = "下午好！";
+                greetingDesc = "喝杯水稍作休息，今天也辛苦啦，继续为你提供全方位协助。";
+              } else if (hour >= 18 && hour < 23) {
+                greetingTitle = "晚上好！";
+                greetingDesc = "今天辛苦啦！放松一下心情，或者整理沉淀一下今天的成果吧。";
+              } else {
+                greetingTitle = "夜深了！";
+                greetingDesc = "夜深人静啦，注意早点休息哦，明天又是充实而美好的一天。";
+              }
+              return (
+                <>
+                  <h2 className="mb-2 text-xl font-semibold text-zinc-100 tracking-tight">
+                    {greetingTitle}
+                  </h2>
+                  <p className="mb-6 max-w-md text-[13.5px] text-zinc-400">
+                    {greetingDesc}
+                  </p>
+                </>
+              );
+            })()}
 
             <div className="grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2 text-left">
               {[
@@ -314,7 +342,7 @@ export function ChatMessages({
                   {currentToolActivities.length > 0 && (
                     <div className="flex w-full flex-col gap-1.5 my-1">
                       {currentToolActivities.map((activity) => {
-                        const { input, output } = toolIo(activity);
+                        const { input } = toolIo(activity);
                         const isRunningTool = activity.status === "running";
                         const isFailedTool = activity.status === "failed";
 
