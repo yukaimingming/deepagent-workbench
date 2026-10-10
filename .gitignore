@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 本地配置（可能含密钥，禁止提交）
+.env
+.env.*
+!.env.example
+*.local
+
+# 服务端配置存储（含 API Key，仅本机）
+.data/
+
+# Agent 工作区（Agent 可读写的本地目录）
+workspace/
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 测试覆盖率
+coverage/
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db

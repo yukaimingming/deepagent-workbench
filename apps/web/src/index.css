@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* 设计令牌：深色工作台基调，活动卡片用色需与状态语义区分。 */
+@theme {
+  --color-surface-0: #0b0d12;
+  --color-surface-1: #12151d;
+  --color-surface-2: #1a1f29;
+  --color-surface-3: #232a36;
+  --color-border-subtle: #262d3a;
+  --color-border-strong: #364152;
+  --color-text-primary: #e8ecf3;
+  --color-text-secondary: #a3adbf;
+  --color-text-muted: #6b7688;
+
+  --color-state-running: #4c8dff;
+  --color-state-done: #3ecf8e;
+  --color-state-warn: #f5a524;
+  --color-state-error: #f2555a;
+
+  --color-foreground: #ffffff;
+  --color-muted-foreground: #71717a;
+
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root {
+  --color-foreground: #ffffff;
+  --color-muted-foreground: #71717a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-surface-0);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条：低调处理，避免抢注意力。 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 6px;
+  border: 2px solid var(--color-surface-0);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
+
+/* 生成中的光标提示。 */
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+}
+.streaming-caret::after {
+  content: "▍";
+  margin-left: 1px;
+  animation: caret-blink 1s steps(1) infinite;
+  color: var(--color-state-running);
+}
+
+/* 进行中的脉冲点。 */
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.pulse-dot {
+  animation: soft-pulse 1.4s ease-in-out infinite;
+}
+
+/* 文字微光扫过（AI Elements 的 Shimmer 组件使用）。 */
+@keyframes shimmer-sweep {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: -100% center;
+  }
+}

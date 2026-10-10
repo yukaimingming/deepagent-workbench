@@ -1,0 +1,37 @@
+{
+  "name": "@deepagent/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ag-ui/client": "1.0.2",
+    "@ag-ui/core": "^1.0.2",
+    "@ag-ui/encoder": "^1.0.2",
+    "@deepagent/shared": "workspace:*",
+    "@langchain/anthropic": "^1.5.12",
+    "@langchain/core": "^1.2.14",
+    "@langchain/langgraph": "^1.4.21",
+    "@langchain/langgraph-checkpoint": "^1.1.6",
+    "@langchain/openai": "^1.6.2",
+    "deepagents": "^1.14.2",
+    "langchain": "^1.5.10",
+    "langsmith": "0.10.9",
+    "rxjs": "7.8.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

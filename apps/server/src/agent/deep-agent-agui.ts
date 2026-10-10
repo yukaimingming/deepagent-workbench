@@ -1,0 +1,278 @@
+/**
+ * AG-UI Agent 实现。
+ *
+ * 继承 `AbstractAgent`，把 DeepAgent 的运行接到 AG-UI 事件流上。
+ * 每个线程一个 LangGraph thread_id，用共享 checkpointer 保留会话状态，
+ * 因此刷新页面后可以继续同一会话（进程重启后不保留）。
+ */
+
+import { type BaseEvent, type RunAgentInput, type ResumeEntry } from "@ag-ui/core";
+import { AbstractAgent } from "@ag-ui/client";
+import { Observable } from "rxjs";
+import type { Decision } from "langchain";
+import { MemorySaver } from "@langchain/langgraph";
+import { ConfigStore } from "../config/store.js";
+import { createAgentBundle, type CreateAgentOptions } from "./create-agent.js";
+import { describeRunError } from "./errors.js";
+import {
+  DeepAgentToAguiAdapter,
+  aguiMessagesToLangChain,
+} from "./agui-adapter.js";
+import type { ReasoningEffort } from "@deepagent/shared";
+import { resolveEffortForModel } from "@deepagent/shared";
+import { randomUUID } from "node:crypto";
+import { resolve, sep } from "node:path";
+
+/** Agent 服务的配置。 */
+export interface DeepAgentServiceOptions {
+  store: ConfigStore;
+  workspaceRoot: string;
+  shellEnabled: boolean;
+  approvalRequired: boolean;
+  /** 推理强度（客户端可在 forwardedProps 里覆盖）。 */
+  defaultEffort: ReasoningEffort;
+}
+
+/** 一个线程的运行句柄（用于取消）。 */
+interface ThreadRun {
+  abortController: AbortController;
+  threadId: string;
+}
+
+export class DeepAgentAgui extends AbstractAgent {
+  private readonly store: ConfigStore;
+  private workspaceRoot: string;
+  private readonly baseWorkspaceRoot: string;
+  private readonly shellEnabled: boolean;
+  private readonly approvalRequired: boolean;
+  private readonly defaultEffort: ReasoningEffort;
+  private readonly checkpointer = new MemorySaver();
+  /** threadId → 当前运行，支持取消。 */
+  private readonly activeRuns = new Map<string, ThreadRun>();
+
+  constructor(config: { agentId?: string } & DeepAgentServiceOptions) {
+    super({ agentId: config.agentId ?? "deepagent" });
+    this.store = config.store;
+    this.workspaceRoot = resolve(config.workspaceRoot);
+    this.baseWorkspaceRoot = resolve(config.workspaceRoot);
+    this.shellEnabled = config.shellEnabled;
+    this.approvalRequired = config.approvalRequired;
+    this.defaultEffort = config.defaultEffort;
+  }
+
+  /** 动态更新当前活动工作区根目录。 */
+  setWorkspaceRoot(newRoot: string): void {
+    this.workspaceRoot = resolve(newRoot);
+  }
+
+  /** 获取当前活动工作区根目录。 */
+  getWorkspaceRoot(): string {
+    return this.workspaceRoot;
+  }
+
+  /** AG-UI 要求的入口：返回事件 Observable。 */
+  run(input: RunAgentInput): Observable<BaseEvent> {
+    return new Observable<BaseEvent>((observer) => {
+      const controller = new AbortController();
+      this.activeRuns.set(input.threadId, { abortController: controller, threadId: input.threadId });
+
+      const sink = (event: BaseEvent): void => {
+        observer.next(event);
+      };
+      const adapter = new DeepAgentToAguiAdapter(
+        {
+          input,
+          newId: () => randomUUID(),
+          now: () => Date.now(),
+        },
+        sink,
+      );
+
+      void this.execute(input, adapter, controller.signal)
+        .catch((error: unknown) => {
+          // 底层模型/LangGraph 的原始错误信息对用户不可读，
+          // 也不该把内部文档链接直接抛到界面上。
+          adapter.fail(new Error(describeRunError(error)));
+        })
+        .finally(() => {
+          this.activeRuns.delete(input.threadId);
+          observer.complete();
+        });
+
+      // 订阅方取消时中止底层运行。
+      return () => {
+        controller.abort();
+        this.activeRuns.delete(input.threadId);
+      };
+    });
+  }
+
+  /** 取消指定线程的运行。 */
+  cancelThread(threadId: string): boolean {
+    const run = this.activeRuns.get(threadId);
+    if (!run) return false;
+    run.abortController.abort();
+    return true;
+  }
+
+  private async execute(
+    input: RunAgentInput,
+    adapter: DeepAgentToAguiAdapter,
+    signal: AbortSignal,
+  ): Promise<void> {
+    // RUN_STARTED 必须第一个发出，即使随后立即失败：
+    // AG-UI 客户端依赖它标记运行开始。
+    adapter.start();
+
+    const provider = this.resolveProvider(input);
+    if (!provider) {
+      adapter.fail(
+        new Error("尚未配置可用的模型提供商。请在「模型设置」中添加提供商并填写 API Key。"),
+      );
+      return;
+    }
+    const modelId = readModelId(input) ?? provider.defaultModel ?? provider.models[0] ?? "";
+    if (!modelId) {
+      adapter.fail(new Error("该提供商尚未选择默认模型。请在「模型设置」中设置默认模型。"));
+      return;
+    }
+
+    const effort = resolveEffortForModel(
+      modelId,
+      readEffort(input) ?? this.defaultEffort,
+    ).effort;
+
+    // 前端左侧树选中的目录会作为 forwardedProps.workspaceRoot 传上来。
+    // 必须校验它确实落在配置的工作区之内，否则前端可以借这个字段
+    // 让 Agent 访问任意目录。
+    const requestedWorkspace = readWorkspaceRoot(input);
+    const workspaceRoot =
+      requestedWorkspace && (isInside(this.workspaceRoot, requestedWorkspace) || isInside(this.baseWorkspaceRoot, requestedWorkspace))
+        ? requestedWorkspace
+        : this.workspaceRoot;
+
+    const bundle = createAgentBundle(
+      {
+        provider,
+        workspaceRoot,
+        effort,
+        shellEnabled: this.shellEnabled,
+        approvalRequired: this.approvalRequired,
+      } satisfies CreateAgentOptions,
+      this.checkpointer,
+    );
+
+    const resume = input.resume ?? [];
+    const isResume = resume.length > 0;
+
+    const config = {
+      configurable: { thread_id: input.threadId },
+      signal,
+    };
+
+    const state = isResume
+      ? DeepAgentToAguiAdapter.decisionsToCommand(resumeToDecisions(resume))
+      : { messages: aguiMessagesToLangChain(input.messages) };
+
+    const run = await bundle.agent.streamEvents(state, { ...config, version: "v3" as const });
+
+    // 并发消费各个投影；任一侧抛错都要让整体失败。
+    const consumers: Array<Promise<void>> = [
+      adapter.consumeMessages(run).catch((error: unknown) => {
+        throw error;
+      }),
+      adapter.consumeToolCalls(run),
+      adapter.consumeSubagents(run),
+      adapter.consumeValues(run),
+    ];
+
+    // 等待运行本身完成，再收尾。
+    const runFinished = run.output.then(
+      () => undefined,
+      (error: unknown) => {
+        throw error;
+      },
+    );
+
+    await Promise.all([...consumers, runFinished]);
+
+    const interrupts = run.interrupts ?? [];
+    if (interrupts.length > 0) {
+      adapter.emitInterrupts(interrupts);
+      adapter.finishWithInterrupt();
+      return;
+    }
+    adapter.finish();
+  }
+
+  /** 从 forwardedProps 里解析提供商；缺省用当前启用的那个。 */
+  private resolveProvider(input: RunAgentInput) {
+    const props = (input.forwardedProps ?? {}) as { providerId?: string };
+    const active = this.store.getActive(props.providerId);
+    if (!active) return null;
+    if (active.apiKey.trim().length === 0) return null;
+    if (!active.enabled) return null;
+    return active;
+  }
+}
+
+/** 把 AG-UI 的 ResumeEntry 数组转成 LangGraph 的 Decision 数组。 */
+function resumeToDecisions(resume: readonly ResumeEntry[]): Decision[] {
+  const decisions: Decision[] = [];
+  for (const entry of resume) {
+    const payload = entry.payload as { type?: string; message?: string } | undefined;
+    const type = payload?.type;
+    if (type === "approve") {
+      decisions.push({ type: "approve" });
+    } else if (type === "edit") {
+      // 编辑场景：payload 需带 editedAction，缺省时退化为批准。
+      const edited = (payload as { editedAction?: { name: string; args: Record<string, unknown>; description?: string } }).editedAction;
+      if (edited) {
+        decisions.push({ type: "edit", editedAction: edited });
+      } else {
+        decisions.push({ type: "approve" });
+      }
+    } else {
+      decisions.push({ type: "reject", message: payload?.message ?? "用户拒绝了该操作。" });
+    }
+  }
+  return decisions;
+}
+
+/** 读取客户端请求的工作区目录（左侧树选中的那个）。 */
+function readWorkspaceRoot(input: RunAgentInput): string | null {
+  const props = (input.forwardedProps ?? {}) as { workspaceRoot?: unknown };
+  return typeof props.workspaceRoot === "string" && props.workspaceRoot.length > 0
+    ? props.workspaceRoot
+    : null;
+}
+
+/**
+ * 判断 candidate 是否在 root 之内（或就是 root）。
+ *
+ * 前端传上来的目录必须通过这个检查，否则任何人都能借 forwardedProps
+ * 让 Agent 读写工作区以外的路径。用解析后的路径做前缀比较，
+ * 挡住 `..`、绝对路径和符号链接逃逸。
+ */
+export function isInside(root: string, candidate: string): boolean {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  if (resolvedCandidate === resolvedRoot) return true;
+  // 加分隔符再比，避免 /a/bc 被误判为 /a/b 的子目录。
+  return resolvedCandidate.startsWith(`${resolvedRoot}${sep}`);
+}
+
+/** 读取客户端请求的模型 ID。 */
+function readModelId(input: RunAgentInput): string | null {
+  const props = (input.forwardedProps ?? {}) as { modelId?: unknown };
+  return typeof props.modelId === "string" && props.modelId.length > 0 ? props.modelId : null;
+}
+
+/** 读取客户端请求的推理强度。 */
+function readEffort(input: RunAgentInput): ReasoningEffort | null {
+  const props = (input.forwardedProps ?? {}) as { effort?: unknown };
+  if (props.effort === "low" || props.effort === "medium" || props.effort === "high") {
+    return props.effort;
+  }
+  return null;
+}
