@@ -83,19 +83,20 @@ export const ConversationScrollButton = ({
 
   return (
     !isAtBottom && (
-      <Button
+      <button
+        type="button"
+        data-slot="conversation-scroll-button"
+        aria-label="滚动到底部"
         className={cn(
-          "absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
+          "conversation-scroll-btn absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex size-9 items-center justify-center rounded-full border shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer select-none",
+          "bg-black text-white border-zinc-700 hover:bg-zinc-900",
           className
         )}
         onClick={handleScrollToBottom}
-        size="icon"
-        type="button"
-        variant="outline"
         {...props}
       >
-        <ArrowDownIcon className="size-4" />
-      </Button>
+        <ArrowDownIcon className="size-4 stroke-[2]" />
+      </button>
     )
   );
 };
