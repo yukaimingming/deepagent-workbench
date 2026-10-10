@@ -131,18 +131,8 @@ export function WorkspaceSidebar({
   return (
     <>
       <aside className="relative flex h-full w-[260px] shrink-0 flex-col border-r border-zinc-800/60 bg-black text-zinc-300 select-none animate-in slide-in-from-left duration-200">
-        {/* ================= 顶部工作区标题与操作栏 ================= */}
-        <div className="flex h-12 items-center justify-between px-3 border-b border-zinc-800/40">
-          <button
-            type="button"
-            onClick={() => setIsFolderPickerOpen(true)}
-            className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-200 hover:text-white transition-colors truncate max-w-[150px]"
-            title="点击弹窗切换或浏览工作区文件夹"
-          >
-            <span className="truncate">{selected ? selected.split(/[\\/]/).pop() || selected : "工作区"}</span>
-            <ChevronDownIcon className="size-3.5 text-zinc-500 shrink-0" />
-          </button>
-
+        {/* ================= 顶部操作栏（去除了无用的工作区名称按钮，保留核心操作） ================= */}
+        <div className="flex h-12 items-center justify-end px-3 border-b border-zinc-800/40">
           <div className="flex items-center gap-0.5">
             {/* 添加文件夹按钮（弹窗选择） */}
             <button
