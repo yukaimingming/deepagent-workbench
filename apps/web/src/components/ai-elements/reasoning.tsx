@@ -83,36 +83,47 @@ export const Reasoning = memo(
       onChange: onDurationChange,
       prop: durationProp,
     });
-    const [elapsedSeconds, setElapsedSeconds] = useState(1);
+
+    const startTimeRef = useRef<number>(startedAt ?? Date.now());
+    if (startedAt && startTimeRef.current !== startedAt) {
+      startTimeRef.current = startedAt;
+    }
+
+    const [elapsedSeconds, setElapsedSeconds] = useState(() => {
+      const elapsedMs = Math.max(0, Date.now() - startTimeRef.current);
+      return Math.max(1, Math.floor(elapsedMs / MS_IN_S) + 1);
+    });
 
     const hasEverStreamedRef = useRef(isStreaming);
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
-    const startTimeRef = useRef<number | null>(startedAt ?? null);
 
-    // 实时秒数递增计时器：基于外部 startedAt 或首次流式时间戳，杜绝秒数归零重置
+    // 实时高频秒钟：完全解耦外部流式打字与 re-render 干扰，确保每过 1 秒物理时间 UI 实时无缝递增
     useEffect(() => {
-      if (isStreaming) {
-        hasEverStreamedRef.current = true;
-        const baseStart = startedAt ?? startTimeRef.current ?? Date.now();
-        if (startTimeRef.current === null) {
-          startTimeRef.current = baseStart;
-        }
-        const currentElapsed = Math.max(1, Math.floor((Date.now() - baseStart) / MS_IN_S));
-        setElapsedSeconds(currentElapsed);
-
-        const timer = setInterval(() => {
-          const secs = Math.max(1, Math.floor((Date.now() - baseStart) / MS_IN_S));
-          setElapsedSeconds(secs);
-        }, 1000);
-        return () => clearInterval(timer);
-      } else if (startTimeRef.current !== null || startedAt) {
-        const baseStart = startTimeRef.current ?? startedAt ?? Date.now();
-        const finalSecs = Math.max(1, Math.ceil((Date.now() - baseStart) / MS_IN_S));
+      if (!isStreaming) {
+        // 思考流结束时，锁定最终持续秒数
+        const baseStart = startTimeRef.current;
+        const elapsed = Math.max(0, Date.now() - baseStart);
+        const finalSecs = durationProp ?? Math.max(1, Math.round(elapsed / MS_IN_S));
         setDuration(finalSecs);
         onDurationChange?.(finalSecs);
-        startTimeRef.current = null;
+        return;
       }
-    }, [isStreaming, startedAt, setDuration, onDurationChange]);
+
+      hasEverStreamedRef.current = true;
+
+      // 立即精准计算一次当前流逝秒数（自然秒：0~999ms 为第 1 秒，满 1000ms 即刻同步为第 2 秒）
+      const tick = () => {
+        const baseStart = startTimeRef.current;
+        const elapsedMs = Math.max(0, Date.now() - baseStart);
+        const secs = Math.max(1, Math.floor(elapsedMs / MS_IN_S) + 1);
+        setElapsedSeconds((prev) => (prev !== secs ? secs : prev));
+      };
+      tick();
+
+      // 100ms 高频精准轮询：物理秒数一满立即同步，彻底消除任何相位延迟与卡秒
+      const timer = setInterval(tick, 100);
+      return () => clearInterval(timer);
+    }, [isStreaming, durationProp]);
 
     // Auto-open when streaming starts (unless explicitly closed)
     useEffect(() => {
@@ -235,6 +246,7 @@ export type ReasoningContentProps = ComponentProps<
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => {
     const { isStreaming } = useReasoning();
+    const content = typeof children === "string" ? children.trim() : "";
     return (
       <CollapsibleContent
         className={cn(
@@ -245,7 +257,11 @@ export const ReasoningContent = memo(
         {...props}
       >
         <div className={cn(isStreaming ? "streaming-caret" : "")}>
-          <Streamdown>{children}</Streamdown>
+          {content ? (
+            <Streamdown>{content}</Streamdown>
+          ) : isStreaming ? (
+            <span className="text-zinc-500 text-xs italic">正在组织思路…</span>
+          ) : null}
         </div>
       </CollapsibleContent>
     );

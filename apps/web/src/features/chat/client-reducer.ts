@@ -56,6 +56,7 @@ export interface ClientState {
 /** 所有状态转移动作。 */
 export type ClientAction =
   | { type: "addUserMessage"; id: string; content: string }
+  | { type: "startPendingAssistant"; messageId: string; startedAt: number }
   | { type: "startAssistant"; runId: string; messageId: string }
   | { type: "appendAssistant"; messageId: string; delta: string }
   | { type: "endAssistant"; messageId: string }
@@ -149,6 +150,24 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         ],
       };
 
+    case "startPendingAssistant": {
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            id: action.messageId,
+            role: "assistant",
+            content: "",
+            streaming: false,
+            reasoning: "",
+            reasoningStreaming: true,
+            reasoningStartedAt: action.startedAt,
+          },
+        ],
+      };
+    }
+
     case "startAssistant": {
       const existingIndex = findCurrentAssistantIndex(
         state.messages,
@@ -159,10 +178,15 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         const messages = [...state.messages];
         const target = messages[existingIndex]!;
         textToAssistant.set(bindingKey(state.threadId, action.messageId), target.id);
+        const started = target.reasoningStartedAt ?? Date.now();
+        const elapsed =
+          target.reasoningDuration ??
+          Math.max(1, Math.round((Date.now() - started) / 1000));
         messages[existingIndex] = {
           ...target,
           streaming: true,
           reasoningStreaming: false,
+          reasoningDuration: target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
           runId: action.runId || target.runId,
         };
         return { ...state, messages };
@@ -201,7 +225,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         content: target.content + action.delta,
         streaming: true,
         reasoningStreaming: false,
-        reasoningDuration: elapsed,
+        reasoningDuration: target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
       };
       return { ...state, messages };
     }
@@ -333,8 +357,16 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         action.patch.status === "completed" ||
         action.patch.status === "cancelled" ||
         action.patch.status === "error";
-      const messages = isFinished
-        ? state.messages.map((m) =>
+      let messages = state.messages;
+      if (isFinished) {
+        messages = messages
+          .filter((m) => {
+            if (m.role === "assistant" && !m.content && (!m.reasoning || !m.reasoning.trim())) {
+              return false;
+            }
+            return true;
+          })
+          .map((m) =>
             m.reasoningStreaming
               ? {
                   ...m,
@@ -344,8 +376,8 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
                     Math.max(1, Math.round((Date.now() - (m.reasoningStartedAt ?? Date.now())) / 1000)),
                 }
               : m,
-          )
-        : state.messages;
+          );
+      }
       return { ...state, messages, run: { ...state.run, ...action.patch } };
     }
 

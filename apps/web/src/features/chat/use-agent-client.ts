@@ -203,8 +203,11 @@ export function useAgentClient(serverUrl: string): AgentClient {
       ensureThread(threadId);
       const agent = getAgent(threadId);
       const messageId = cryptoRandomId();
+      const assistantMessageId = cryptoRandomId();
+      const now = Date.now();
       applyActions(threadId, [
         { type: "addUserMessage", id: messageId, content: trimmed },
+        { type: "startPendingAssistant", messageId: assistantMessageId, startedAt: now },
         {
           type: "patchRun",
           patch: { status: "running", error: null, interrupts: [], progressNote: null },

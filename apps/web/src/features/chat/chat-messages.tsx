@@ -34,7 +34,6 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "../../components/ai-elements/reasoning.js";
-import { Shimmer } from "../../components/ai-elements/shimmer.js";
 import { ApprovalCard } from "./approval-card.js";
 import { TodoCard } from "./todo-card.js";
 import {
@@ -46,7 +45,6 @@ import {
   PencilIcon,
   ArrowUpIcon,
   TerminalIcon,
-  BrainIcon,
 } from "lucide-react";
 import type { Activity, ChatMessage } from "./chat-types.js";
 
@@ -103,10 +101,6 @@ export function ChatMessages({
   const toolActivities = useMemo(() => {
     return activities.filter((activity) => activity.kind === "tool");
   }, [activities]);
-
-  // 是否处于用户发出提问后等待助手响应的初始思考阶段
-  const isWaitingAssistant =
-    isRunning && messages.length > 0 && messages[messages.length - 1]?.role === "user";
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -291,8 +285,8 @@ export function ChatMessages({
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
-                  {/* 1. 思考组件（Reasoning）：严格遵循官网例子，在具有真实推理内容时才挂载，内容同步流式展现 */}
-                  {hasReasoning ? (
+                  {/* 1. 思考组件（Reasoning）：生命周期自发送时刻起全程唯一且稳定，秒表与打字内容毫秒级同步 */}
+                  {(hasReasoning || isReasoningStreaming) ? (
                     <Reasoning
                       className="mb-1 w-full"
                       isStreaming={isReasoningStreaming}
@@ -306,14 +300,6 @@ export function ChatMessages({
                         {reasoningText}
                       </ReasoningContent>
                     </Reasoning>
-                  ) : isLast && isRunning && message.content.length === 0 && !hasRunningTool ? (
-                    /* 首包思考内容生成前的轻量微光连接态：杜绝未有内容即过早显示空折叠框跳秒 */
-                    <div className="flex items-center gap-2 text-xs py-1 text-zinc-400">
-                      <BrainIcon className="size-4 animate-pulse text-zinc-400" />
-                      <Shimmer as="span" duration={2} spread={3} className="font-medium text-xs text-zinc-300">
-                        正在思考中...
-                      </Shimmer>
-                    </div>
                   ) : null}
 
                   {/* 2. 待办任务队列卡片（Queue / Todo）：仅在当前轮次调用了 write_todos 时展示 */}
@@ -447,19 +433,6 @@ export function ChatMessages({
                 </div>
               );
             })}
-
-            {/* 当处于发送初期、助手消息尚未返回时的思考占位组件（实时秒数+微光动效） */}
-            {isWaitingAssistant && (
-              <div className="flex flex-col w-full text-zinc-100 space-y-3 animate-in fade-in duration-200">
-                <Reasoning
-                  className="mb-1 w-full"
-                  isStreaming={true}
-                  defaultOpen={false}
-                >
-                  <ReasoningTrigger className="text-zinc-400 hover:text-zinc-200 py-1 flex items-center gap-2 text-xs" />
-                </Reasoning>
-              </div>
-            )}
           </div>
         )}
       </ConversationContent>
