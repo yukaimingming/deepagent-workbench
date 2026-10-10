@@ -921,7 +921,9 @@ export const PromptInput = ({
         ref={formRef}
         {...props}
       >
-        <InputGroup className="overflow-visible border-0 bg-transparent shadow-none focus-within:ring-0">{children}</InputGroup>
+        <InputGroup className="overflow-visible border-0 bg-transparent shadow-none ring-0 focus-within:ring-0 focus-visible:ring-0 dark:border-0 dark:has-[[data-slot=input-group-control]:focus-visible]:border-0 outline-none">
+          {children}
+        </InputGroup>
       </form>
     </>
   );

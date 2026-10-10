@@ -123,8 +123,49 @@ try {
 
   await capture(`${ARTIFACT_DIR}/screenshot-verified-prompt-input-dropdown.png`);
 
-  console.log("\n=== 3. 验证输入文本与提交按钮交互 ===");
+  console.log("\n=== 3. 验证真实点击聚焦边框颜色（官网暗灰且绝无亮白环） ===");
+  const box = await evalJs(`
+    (() => {
+      const ta = document.querySelector('textarea');
+      const r = ta.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()
+  `);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
+  await sleep(400);
+
+  const focusCheck = await evalJs(`
+    (() => {
+      const form = document.querySelector('form');
+      const ig = document.querySelector('[data-slot="input-group"]');
+      const ta = document.querySelector('textarea');
+      const formStyle = window.getComputedStyle(form);
+      const igStyle = window.getComputedStyle(ig);
+      const hasWhiteRing = igStyle.boxShadow.includes('0px 0px 0px 3px');
+      return {
+        formBorderColor: formStyle.borderColor,
+        isWhiteBorder: formStyle.borderColor.includes('255, 255, 255'),
+        hasWhiteRing,
+        boxShadow: igStyle.boxShadow,
+      };
+    })()
+  `);
+  console.log("点击聚焦边框检查结果:", focusCheck);
+  if (focusCheck.isWhiteBorder || focusCheck.hasWhiteRing) {
+    throw new Error("点击输入框时边框依然包含亮白颜色或全白发光环！");
+  }
+  await capture(`${ARTIFACT_DIR}/screenshot-verified-focus-dark-gray.png`);
+
+  console.log("\n=== 4. 验证输入文本与提交按钮交互 ===");
   // 选择“高”档位
+  await evalJs(`
+    (() => {
+      const reasonBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('思考:'));
+      if (reasonBtn) reasonBtn.click();
+    })()
+  `);
+  await sleep(300);
   await evalJs(`
     (() => {
       const highOption = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('高 (high)'));

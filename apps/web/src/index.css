@@ -19,6 +19,8 @@
 
   --color-foreground: #ffffff;
   --color-muted-foreground: #71717a;
+  --color-ring: #3f3f46;
+  --color-input: #27272a;
 
   --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
@@ -27,6 +29,8 @@
 :root {
   --color-foreground: #ffffff;
   --color-muted-foreground: #71717a;
+  --ring: 240 5% 26%;
+  --input: 240 5% 15%;
 }
 
 html,

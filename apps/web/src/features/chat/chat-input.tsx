@@ -109,7 +109,7 @@ export function ChatInput({
           {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
           <PromptInput
             onSubmit={handleSubmit}
-            className="rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-700 transition-colors overflow-visible"
+            className="rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
           >
             <PromptInputBody>
               <PromptInputTextarea
