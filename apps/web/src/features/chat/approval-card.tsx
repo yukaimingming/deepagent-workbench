@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { safeStringify, type Activity, type ApprovalDetail } from "@deepagent/shared";
+import { CheckIcon, XIcon, ChevronDownIcon } from "lucide-react";
+import {
+  Confirmation,
+  ConfirmationRequest,
+  ConfirmationAccepted,
+  ConfirmationRejected,
+  ConfirmationActions,
+  ConfirmationAction,
+  type ToolApprovalState,
+} from "../../components/ai-elements/confirmation.js";
 import { CodeBlock } from "../../components/ai-elements/code-block.js";
-import { ChevronDownIcon, CheckCircle2Icon, XCircleIcon } from "lucide-react";
 import { cn } from "../../lib/utils.js";
 
 export function ApprovalCard({
@@ -20,99 +29,120 @@ export function ApprovalCard({
 
   const toolName = detail?.toolName ?? activity.title;
 
-  // 1. 已决态（批准或拒绝）：默认自动收缩为紧凑的单行条目，极度省空间
-  if (decision) {
-    const isApproved = decision === "approve";
-    return (
-      <div className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs transition-all my-1">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            {isApproved ? (
-              <CheckCircle2Icon className="size-3.5 text-emerald-400 shrink-0" />
-            ) : (
-              <XCircleIcon className="size-3.5 text-red-400 shrink-0" />
-            )}
-            <span className="font-medium text-zinc-200 truncate">
-              {toolName}
-            </span>
-            <span className={cn("text-[11.5px]", isApproved ? "text-emerald-400/90" : "text-red-400/90")}>
-              已{isApproved ? "批准执行" : "拒绝操作"}
+  // 根据当前是否有决策映射为官方定义的 approval 和 state
+  const approvalState: ToolApprovalState = decision
+    ? decision === "approve"
+      ? "approval-responded"
+      : "output-denied"
+    : "approval-requested";
+
+  const approvalInfo = {
+    id: activity.id,
+    approved: decision ? decision === "approve" : undefined,
+  };
+
+  return (
+    <Confirmation approval={approvalInfo} state={approvalState} className="my-2.5">
+      <ConfirmationRequest>
+        <div className="flex flex-col gap-1.5">
+          <div className="text-foreground text-sm font-medium">
+            此工具请求执行敏感操作：<code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">{toolName}</code>
+          </div>
+          {detail?.impact ? (
+            <div className="text-muted-foreground text-xs leading-relaxed">
+              {detail.impact}
+            </div>
+          ) : null}
+          {args.text ? (
+            <div className="mt-1">
+              <button
+                type="button"
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="flex items-center gap-1 text-[11.5px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <span>{isExpanded ? "收起参数" : "查看调用参数"}</span>
+                <ChevronDownIcon
+                  className={cn("size-3 transition-transform", isExpanded ? "rotate-180" : "rotate-0")}
+                />
+              </button>
+              {isExpanded && (
+                <div className="mt-1.5 max-h-48 overflow-auto rounded border border-border">
+                  <CodeBlock code={args.text} language="json" />
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </ConfirmationRequest>
+
+      <ConfirmationAccepted>
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2">
+            <CheckIcon className="size-4 text-emerald-500 shrink-0" />
+            <span className="font-medium text-sm">
+              已批准执行：<code className="text-xs font-mono bg-muted px-1 py-0.5 rounded">{toolName}</code>
             </span>
           </div>
-
-          {(detail?.impact || args.text) && (
+          {args.text && (
             <button
               type="button"
               onClick={() => setIsExpanded(!isExpanded)}
-              className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors ml-2 shrink-0"
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-2"
             >
-              <span>{isExpanded ? "收起详情" : "查看参数"}</span>
-              <ChevronDownIcon
-                className={cn("size-3 transition-transform", isExpanded ? "rotate-180" : "rotate-0")}
-              />
+              <span>{isExpanded ? "收起" : "参数"}</span>
+              <ChevronDownIcon className={cn("size-3 transition-transform", isExpanded ? "rotate-180" : "rotate-0")} />
             </button>
           )}
         </div>
-
-        {/* 仅在用户主动点击时才展开参数详情 */}
-        {isExpanded && (
-          <div className="mt-2.5 pt-2 border-t border-zinc-800/80 space-y-2 animate-in fade-in duration-150">
-            {detail?.impact && (
-              <p className="rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[11px] text-zinc-400">
-                {detail.impact}
-              </p>
-            )}
-            {args.text && (
-              <div className="max-h-48 overflow-auto rounded border border-zinc-800/80">
-                <CodeBlock code={args.text} language="json" />
-              </div>
-            )}
+        {isExpanded && args.text && (
+          <div className="mt-2 max-h-40 overflow-auto rounded border border-border w-full">
+            <CodeBlock code={args.text} language="json" />
           </div>
         )}
-      </div>
-    );
-  }
+      </ConfirmationAccepted>
 
-  // 2. 待审批态：展示醒目的操作卡片
-  return (
-    <article className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 my-1">
-      <header className="flex items-center gap-2">
-        <span className="size-2 shrink-0 rounded-full bg-amber-400 animate-pulse" aria-hidden="true" />
-        <h4 className="truncate text-[13px] font-medium text-zinc-100">
-          待审批 · {toolName}
-        </h4>
-      </header>
-
-      {detail?.impact ? (
-        <p className="mt-2 rounded border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[11.5px] text-amber-300">
-          {detail.impact}
-        </p>
-      ) : null}
-
-      {args.text ? (
-        <div className="mt-2 max-h-56 overflow-auto rounded border border-zinc-800">
-          <CodeBlock code={args.text} language="json" />
+      <ConfirmationRejected>
+        <div className="flex items-center justify-between w-full">
+          <div className="flex items-center gap-2">
+            <XIcon className="size-4 text-destructive shrink-0" />
+            <span className="font-medium text-sm">
+              已拒绝执行：<code className="text-xs font-mono bg-muted px-1 py-0.5 rounded">{toolName}</code>
+            </span>
+          </div>
+          {args.text && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-2"
+            >
+              <span>{isExpanded ? "收起" : "参数"}</span>
+              <ChevronDownIcon className={cn("size-3 transition-transform", isExpanded ? "rotate-180" : "rotate-0")} />
+            </button>
+          )}
         </div>
-      ) : null}
+        {isExpanded && args.text && (
+          <div className="mt-2 max-h-40 overflow-auto rounded border border-border w-full">
+            <CodeBlock code={args.text} language="json" />
+          </div>
+        )}
+      </ConfirmationRejected>
 
-      <div className="mt-2.5 flex items-center gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onDecide?.(activity.id, "approve")}
-          className="rounded-md bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-[12px] font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          批准执行
-        </button>
-        <button
-          type="button"
+      <ConfirmationActions>
+        <ConfirmationAction
+          variant="outline"
           disabled={disabled}
           onClick={() => onDecide?.(activity.id, "reject")}
-          className="rounded-md bg-red-500/15 border border-red-500/30 px-3 py-1 text-[12px] font-medium text-red-300 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
           拒绝
-        </button>
-      </div>
-    </article>
+        </ConfirmationAction>
+        <ConfirmationAction
+          variant="default"
+          disabled={disabled}
+          onClick={() => onDecide?.(activity.id, "approve")}
+        >
+          批准
+        </ConfirmationAction>
+      </ConfirmationActions>
+    </Confirmation>
   );
 }

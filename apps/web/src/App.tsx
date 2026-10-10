@@ -430,20 +430,20 @@ export function App() {
 
           {/* 人工审批通知栏 */}
           {pendingInterrupts.length > 0 ? (
-            <div className="shrink-0 border-t border-amber-900/60 bg-amber-950/30 px-4 py-2.5">
+            <div className="shrink-0 border-t border-border bg-card px-4 py-2.5">
               <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4">
-                <div className="flex items-center gap-2 text-amber-300 text-[12px]">
-                  <AlertCircleIcon className="size-4 shrink-0" />
+                <div className="flex items-center gap-2 text-foreground text-[12.5px] font-medium">
+                  <AlertCircleIcon className="size-4 shrink-0 text-muted-foreground" />
                   <span>
-                    需人工确认：{pendingInterrupts.length} 项敏感操作
-                    {hasDecisions ? "（已选择决策）" : ""}
+                    需人工确认：{pendingInterrupts.length} 项操作
+                    {hasDecisions ? "（已就绪）" : ""}
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={handleSubmitDecisions}
                   disabled={!hasDecisions || isRunning}
-                  className="rounded bg-amber-500 hover:bg-amber-400 px-3 py-1 text-[12px] font-semibold text-black transition-colors disabled:opacity-40"
+                  className="rounded-md bg-foreground text-background hover:bg-foreground/90 px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40"
                 >
                   继续执行
                 </button>

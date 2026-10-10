@@ -59,7 +59,7 @@ export function SettingsModal(props: SettingsModalProps) {
   const { open, onClose } = props;
 
   return (
-    <Modal open={open} onClose={onClose} title="模型与提供商设置" width="lg">
+    <Modal open={open} onClose={onClose} title="设置" width="lg">
       {open ? (
         <SettingsForm
           key={props.activeProviderId ?? "__new__"}

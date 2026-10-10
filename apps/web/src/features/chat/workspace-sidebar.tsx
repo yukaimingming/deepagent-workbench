@@ -360,7 +360,7 @@ export function WorkspaceSidebar({
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[12.5px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition-colors"
           >
             <SettingsIcon className="size-4 text-zinc-500" />
-            <span>模型与提供商设置</span>
+            <span>设置</span>
           </button>
         </div>
       </aside>
