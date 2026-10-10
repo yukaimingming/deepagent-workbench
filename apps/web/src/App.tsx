@@ -187,14 +187,17 @@ export function App() {
   const modelStatusKind: "ok" | "warn" | "error" = canSend ? "ok" : "error";
 
   // 发送消息
-  const handleSend = (content: string): void => {
-    void send(content, {
-      providerId: settings.activeProviderId ?? undefined,
-      modelId: currentModelId ?? undefined,
-      effort: effortResolution.effort,
-      workspaceRoot: workspaceRoot ?? undefined,
-    });
-  };
+  const handleSend = useCallback(
+    (content: string): void => {
+      void send(content, {
+        providerId: settings.activeProviderId ?? undefined,
+        modelId: currentModelId ?? undefined,
+        effort: effortResolution.effort,
+        workspaceRoot: workspaceRoot ?? undefined,
+      });
+    },
+    [send, settings.activeProviderId, currentModelId, effortResolution.effort, workspaceRoot],
+  );
 
   // 新建会话
   const handleNewSession = useCallback(
@@ -324,10 +327,13 @@ export function App() {
     handleSend(userMessage.content);
   };
 
-  const handleEditMessage = (messageId: string, newContent: string): void => {
-    rollbackBeforeMessage(messageId);
-    handleSend(newContent);
-  };
+  const handleEditMessage = useCallback(
+    (messageId: string, newContent: string): void => {
+      rollbackBeforeMessage(messageId);
+      handleSend(newContent);
+    },
+    [rollbackBeforeMessage, handleSend],
+  );
 
   useEffect(() => {
     (window as unknown as { __deepagentTestHooks?: unknown }).__deepagentTestHooks = {
@@ -338,7 +344,7 @@ export function App() {
       handleNewSession,
       sessionsManager,
     };
-  }, [state, loadState, handleSend, handleNewSession, sessionsManager]);
+  }, [state, loadState, handleSend, handleEditMessage, handleNewSession, sessionsManager]);
 
   const hasDecisions = Object.keys(state.pendingDecisions).length > 0;
   const pendingInterrupts = state.run.interrupts;

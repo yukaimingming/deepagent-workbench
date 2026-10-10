@@ -497,9 +497,9 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
         </label>
 
         {/* ================= 模型列表管理与一键全量导入 ================= */}
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 space-y-2.5">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 space-y-2.5 settings-models-box">
           <div className="flex items-center justify-between">
-            <span className="text-[12px] font-medium text-zinc-300">
+            <span className="text-[12px] font-medium text-zinc-300 settings-models-label">
               可用模型列表 ({draft.models.length})
             </span>
             <div className="flex items-center gap-2">
@@ -507,7 +507,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
                 type="button"
                 onClick={() => void handleFetchModels()}
                 disabled={fetchingModels}
-                className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-[11.5px] text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1 text-[11.5px] text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50 settings-fetch-models-btn"
               >
                 <RefreshCwIcon className={`size-3 ${fetchingModels ? "animate-spin" : ""}`} />
                 <span>{fetchingModels ? "正在查询..." : "获取远程模型列表"}</span>
@@ -517,14 +517,14 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
 
           {/* 模型列表呈现 */}
           {draft.models.length > 0 ? (
-            <div className="max-h-36 overflow-y-auto space-y-1 rounded border border-zinc-800/80 bg-black/60 p-2">
+            <div className="max-h-36 overflow-y-auto space-y-1 rounded border border-zinc-800/80 bg-black/60 p-2 settings-model-list-scroll">
               {draft.models.map((model) => {
                 const isDefault = draft.defaultModel === model;
                 return (
                   <div
                     key={model}
-                    className={`flex items-center justify-between gap-2 px-2.5 py-1 rounded text-[12px] transition-colors ${
-                      isDefault ? "bg-zinc-800 text-white" : "text-zinc-300 hover:bg-zinc-900"
+                    className={`flex items-center justify-between gap-2 px-2.5 py-1 rounded text-[12px] transition-colors settings-model-item ${
+                      isDefault ? "bg-zinc-800 text-white is-default" : "text-zinc-300 hover:bg-zinc-900"
                     }`}
                   >
                     <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
@@ -537,7 +537,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
                       />
                       <span className="font-mono truncate">{model}</span>
                       {isDefault && (
-                        <span className="text-[10.5px] bg-zinc-700 px-1.5 py-0.2 rounded text-zinc-200 shrink-0">
+                        <span className="text-[10.5px] bg-zinc-700 px-1.5 py-0.2 rounded text-zinc-200 shrink-0 settings-default-badge">
                           默认模型
                         </span>
                       )}
@@ -556,7 +556,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
               })}
             </div>
           ) : (
-            <p className="rounded border border-zinc-800/80 bg-black/40 px-3 py-2 text-[12px] text-zinc-500">
+            <p className="rounded border border-zinc-800/80 bg-black/40 px-3 py-2 text-[12px] text-zinc-500 settings-model-empty">
               当前暂未添加任何模型。可点击上方「获取远程模型列表」或在下方手动添加。
             </p>
           )}
@@ -574,13 +574,13 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
                 }
               }}
               placeholder="输入模型 ID，如 deepseek-chat, gpt-4o 等"
-              className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1 font-mono text-[12px] text-zinc-200 outline-none focus:border-zinc-600"
+              className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1 font-mono text-[12px] text-zinc-200 outline-none focus:border-zinc-600 settings-input"
             />
             <button
               type="button"
               onClick={() => void handleAddModel()}
               disabled={!manualModel.trim()}
-              className="rounded bg-zinc-800 px-3 py-1 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors"
+              className="rounded bg-zinc-800 px-3 py-1 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors settings-add-model-btn"
             >
               添加
             </button>
@@ -661,7 +661,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
               type="button"
               onClick={() => void handleTest()}
               disabled={testing || !isEditing}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors"
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40 transition-colors settings-test-btn"
             >
               {testing ? "测试中…" : "测试连接"}
             </button>
@@ -670,7 +670,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
               type="button"
               onClick={() => void handleSave()}
               disabled={saving}
-              className="flex items-center gap-1.5 rounded-lg bg-zinc-100 hover:bg-white px-4 py-1.5 text-[12px] font-medium text-black disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1.5 rounded-lg bg-zinc-100 hover:bg-white px-4 py-1.5 text-[12px] font-medium text-black disabled:opacity-50 transition-colors settings-save-btn"
             >
               <CheckIcon className="size-3.5 stroke-[2.5]" />
               <span>{saving ? "保存中…" : isEditing ? "保存修改" : "保存新厂商"}</span>

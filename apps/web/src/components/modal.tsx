@@ -41,9 +41,9 @@ export function Modal({ open, onClose, title, children, width = "lg" }: ModalPro
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={`my-8 w-full ${width === "lg" ? "max-w-3xl" : "max-w-xl"} rounded-xl border border-zinc-800 bg-[#09090b] shadow-2xl outline-none text-zinc-100`}
+        className={`my-8 w-full ${width === "lg" ? "max-w-3xl" : "max-w-xl"} rounded-xl border border-zinc-800 bg-[#09090b] shadow-2xl outline-none text-zinc-100 modal-panel`}
       >
-        <header className="flex items-center justify-between border-b border-zinc-800/80 px-5 py-3.5">
+        <header className="flex items-center justify-between border-b border-zinc-800/80 px-5 py-3.5 modal-header">
           <h2 className="text-[14px] font-semibold text-zinc-100">{title}</h2>
           <button
             type="button"

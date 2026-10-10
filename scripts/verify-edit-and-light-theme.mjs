@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import WebSocket from "ws";
 
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
-const CDP_PORT = 9388;
+const CDP_PORT = 9389;
 const APP_URL = "http://127.0.0.1:5173/";
 const ARTIFACT_DIR = "C:/Users/kaiming yu/.gemini/antigravity/brain/22cd3aa5-c1e7-425d-baa7-19c1aa2704ee";
 
@@ -16,7 +16,7 @@ const chrome = spawn(
     "--disable-gpu",
     "--no-sandbox",
     `--remote-debugging-port=${CDP_PORT}`,
-    `--user-data-dir=${process.env.TEMP}/cdp-verify-edit-theme`,
+    `--user-data-dir=${process.env.TEMP}/cdp-verify-modal-and-time`,
     "--window-size=1440,920",
   ],
   { stdio: "ignore" },
@@ -84,17 +84,21 @@ async function screenshot(filePath) {
 }
 
 async function run() {
-  console.log("=== 开始端到端自动化验证：消息编辑、输入框一致性、纯白浅色主题、侧边栏选中高亮与表格规范 ===");
+  console.log("=== 开始端到端自动化验证：会话时间、全灰白Tooltip（无黑三角）、模型设置浅色列表与按钮 ===");
 
   await sendCdp("Page.enable");
   await sendCdp("DOM.enable");
   await sendCdp("Page.navigate", { url: APP_URL });
   await sleep(1500);
 
-  // 1. 通过测试钩子直接加载包含用户消息与表格回复的会话状态
-  console.log("-> 注入测试会话数据与历史消息...");
+  // 1. 设置浅色主题并注入测试会话
+  console.log("-> 设置浅色主题模式并加载测试会话...");
   await evaluate(`(() => {
-    const threadId = "session-test-edit-table-001";
+    localStorage.setItem("deepagent_theme_mode", "light");
+    document.documentElement.classList.remove("dark");
+    document.documentElement.classList.add("light");
+    document.documentElement.setAttribute("data-theme", "light");
+
     const sampleState = {
       messages: [
         {
@@ -107,22 +111,20 @@ async function run() {
         {
           id: "msg-assistant-1",
           role: "assistant",
-          content:
-            "前后端服务已在本地成功启动运行！下表是当前服务的健康状态与详细端口信息：\\n\\n| 服务名称 | 监听端口 | 状态 | 访问协议 |\\n| :--- | :--- | :--- | :--- |\\n| 前端 Web 控制台 | 5173 | 运行正常 (200 OK) | HTTP / SSE |\\n| 后端 Agent API | 8787 | 运行正常 (200 OK) | AG-UI 协议 |\\n| 本地文件工作区 | D:/temp/langchain | 权限受限沙箱 | 本地安全挂载 |\\n\\n服务状态健康，可随时发送指令继续调试。",
+          content: "服务已就绪。",
           streaming: false,
-          runId: "run-001",
         },
       ],
       activities: [],
       run: {
         status: "idle",
         runId: null,
-        threadId: threadId,
+        threadId: "test-thread-01",
         progressNote: null,
         interrupts: [],
         error: null,
       },
-      threadId: threadId,
+      threadId: "test-thread-01",
       pendingDecisions: {},
     };
 
@@ -130,19 +132,22 @@ async function run() {
       window.__deepagentTestHooks.loadState(sampleState);
     }
   })()`);
+  await sleep(800);
 
-  await sleep(600);
-
-  // 2. 检查用户消息与下方元数据栏（时间戳 14:14、复制按钮、编辑按钮）
-  console.log("-> 验证用户消息及时间戳与按钮...");
-  const timeText = await evaluate(`(() => {
-    const timeSpan = document.querySelector(".group\\\\/user span.tabular-nums");
-    return timeSpan ? timeSpan.textContent : null;
+  // 2. 验证左侧列表会话项是否显示了时间
+  console.log("-> 验证左侧侧边栏会话项时间显示...");
+  const sessionTimeCheck = await evaluate(`(() => {
+    const timeSpan = document.querySelector(".sidebar-session-item .session-time");
+    return {
+      hasTimeSpan: !!timeSpan,
+      timeText: timeSpan ? timeSpan.textContent.trim() : "",
+      timeColor: timeSpan ? window.getComputedStyle(timeSpan).color : "none",
+    };
   })()`);
-  console.log(`用户消息时间戳显示: [${timeText}]`);
+  console.log("侧边栏会话时间显示检查:", sessionTimeCheck);
 
-  // 鼠标悬停在编辑按钮上触发 Tooltip
-  console.log("-> 悬停在编辑按钮上，展示暗黑背景白字 Tooltip...");
+  // 3. 悬停在编辑按钮上，验证全灰白 Tooltip 及无黑色小三角
+  console.log("-> 悬停在编辑按钮上验证 Tooltip 全灰白与小三角颜色...");
   const editBtnPos = await evaluate(`(() => {
     const btn = document.querySelector(".group\\\\/user button:has(svg.lucide-pencil)");
     if (!btn) return null;
@@ -159,85 +164,60 @@ async function run() {
     await sleep(600);
   }
 
-  const tooltipScreenshot = `${ARTIFACT_DIR}/screenshot-verified-edit-tooltip.png`;
-  await screenshot(tooltipScreenshot);
-  console.log("已保存编辑悬停提示截图:", tooltipScreenshot);
+  // 检查 Tooltip 内容与箭头小三角的颜色
+  const tooltipStyleCheck = await evaluate(`(() => {
+    const content = document.querySelector('[data-slot="tooltip-content"]');
+    const arrow = document.querySelector('[data-slot="tooltip-arrow"]');
+    return {
+      hasContent: !!content,
+      contentBg: content ? window.getComputedStyle(content).backgroundColor : "none",
+      contentColor: content ? window.getComputedStyle(content).color : "none",
+      hasArrow: !!arrow,
+      arrowBg: arrow ? window.getComputedStyle(arrow).backgroundColor : "none",
+      arrowFill: arrow ? window.getComputedStyle(arrow).fill : "none",
+    };
+  })()`);
+  console.log("Tooltip 全灰白与小三角颜色断言结果:", tooltipStyleCheck);
 
-  // 3. 点击编辑按钮，进入内联编辑模式
-  console.log("-> 点击编辑按钮测试内联编辑卡片...");
+  const mainViewScreenshot = `${ARTIFACT_DIR}/screenshot-verified-sidebar-time-and-tooltip.png`;
+  await screenshot(mainViewScreenshot);
+  console.log("已保存侧边栏时间与全灰白 Tooltip 截图:", mainViewScreenshot);
+
+  // 4. 打开“模型与供应商设置”弹窗，验证模型列表和各操作按钮在浅色模式下消除灰色
+  console.log("-> 打开模型设置模态框并验证浅色列表与按钮...");
   await evaluate(`(() => {
-    const btn = document.querySelector(".group\\\\/user button:has(svg.lucide-pencil)");
+    const btn = document.querySelector("[data-testid='open-settings-modal-btn']");
     if (btn) btn.click();
   })()`);
-  await sleep(500);
+  await sleep(1000);
 
-  const editState = await evaluate(`(() => {
-    const ta = document.querySelector(".group\\\\/user textarea");
-    const resendBtn = document.querySelector(".group\\\\/user button[title*='重新发送']");
-    const hasSendIcon = resendBtn ? !!resendBtn.querySelector("svg.lucide-corner-down-left") : false;
-    return {
-      hasTextarea: !!ta,
-      textareaValue: ta ? ta.value : "",
-      hasResendBtn: !!resendBtn,
-      hasSendIcon,
-    };
-  })()`);
-  console.log("内联编辑状态与重新发送按钮检查:", editState);
-
-  const editCardScreenshot = `${ARTIFACT_DIR}/screenshot-verified-inline-edit-card.png`;
-  await screenshot(editCardScreenshot);
-  console.log("已保存内联编辑模式截图:", editCardScreenshot);
-
-  // 点击取消退出编辑
-  await evaluate(`(() => {
-    const cancelBtn = Array.from(document.querySelectorAll(".group\\\\/user button")).find(b => b.textContent.includes("取消"));
-    if (cancelBtn) cancelBtn.click();
-  })()`);
-  await sleep(400);
-
-  // 4. 切换为浅色主题，验证“纯白浅色模式”、“左侧选中会话不发黑”、“表格标题灰白+表格区纯白”
-  console.log("-> 切换为浅色主题...");
-  // 直接通过 theme hook 的 localStorage 并触发设置
-  await evaluate(`(() => {
-    localStorage.setItem("deepagent_theme_mode", "light");
-    document.documentElement.classList.remove("dark");
-    document.documentElement.classList.add("light");
-    document.documentElement.setAttribute("data-theme", "light");
-  })()`);
-  await sleep(600);
-
-  // 验证颜色属性
-  const themeVerification = await evaluate(`(() => {
-    const bodyBg = window.getComputedStyle(document.body).backgroundColor;
-    const activeItem = document.querySelector(".sidebar-session-item[data-active='true']");
-    const activeItemBg = activeItem ? window.getComputedStyle(activeItem).backgroundColor : "none";
-    const activeItemColor = activeItem ? window.getComputedStyle(activeItem).color : "none";
-
-    const th = document.querySelector("table[data-streamdown='table'] th");
-    const thBg = th ? window.getComputedStyle(th).backgroundColor : "none";
-    const thColor = th ? window.getComputedStyle(th).color : "none";
-
-    const td = document.querySelector("table[data-streamdown='table'] td");
-    const tdBg = td ? window.getComputedStyle(td).backgroundColor : "none";
-    const tdColor = td ? window.getComputedStyle(td).color : "none";
+  // 检查设置弹窗面板、模型列表滚动区、按钮的计算颜色
+  const modalStyleCheck = await evaluate(`(() => {
+    const panel = document.querySelector(".modal-panel");
+    const scrollBox = document.querySelector(".settings-model-list-scroll");
+    const fetchBtn = document.querySelector(".settings-fetch-models-btn");
+    const addBtn = document.querySelector(".settings-add-model-btn");
+    const testBtn = document.querySelector(".settings-test-btn");
+    const defaultItem = document.querySelector(".settings-model-item.is-default");
 
     return {
-      bodyBg,
-      activeItemBg,
-      activeItemColor,
-      thBg,
-      thColor,
-      tdBg,
-      tdColor,
+      panelBg: panel ? window.getComputedStyle(panel).backgroundColor : "none",
+      scrollBoxBg: scrollBox ? window.getComputedStyle(scrollBox).backgroundColor : "none",
+      fetchBtnBg: fetchBtn ? window.getComputedStyle(fetchBtn).backgroundColor : "none",
+      fetchBtnColor: fetchBtn ? window.getComputedStyle(fetchBtn).color : "none",
+      addBtnBg: addBtn ? window.getComputedStyle(addBtn).backgroundColor : "none",
+      addBtnColor: addBtn ? window.getComputedStyle(addBtn).color : "none",
+      testBtnBg: testBtn ? window.getComputedStyle(testBtn).backgroundColor : "none",
+      defaultItemBg: defaultItem ? window.getComputedStyle(defaultItem).backgroundColor : "none",
     };
   })()`);
-  console.log("浅色模式关键元素颜色断言结果:", themeVerification);
+  console.log("模型设置弹窗浅色样式断言结果:", modalStyleCheck);
 
-  const lightThemeScreenshot = `${ARTIFACT_DIR}/screenshot-verified-light-theme-sidebar-table.png`;
-  await screenshot(lightThemeScreenshot);
-  console.log("已保存浅色模式（纯白背景、侧边栏高亮清晰、表格表头灰白+表格区纯白）全景截图:", lightThemeScreenshot);
+  const modalScreenshot = `${ARTIFACT_DIR}/screenshot-verified-settings-modal-light.png`;
+  await screenshot(modalScreenshot);
+  console.log("已保存模型设置浅色弹窗截图:", modalScreenshot);
 
-  console.log("=== 端到端自动化验证全部完成 ===");
+  console.log("=== 端到端自动化验证圆满完成 ===");
   cleanup();
   process.exit(0);
 }

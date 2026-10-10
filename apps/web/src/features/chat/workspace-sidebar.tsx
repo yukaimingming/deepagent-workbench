@@ -61,6 +61,15 @@ interface WorkspaceSidebarProps {
   serverUrl?: string;
 }
 
+/** 格式化会话更新时间为 HH:mm 格式（例如 14:14） */
+function formatSessionTime(timestamp?: number): string {
+  if (!timestamp) return "";
+  const d = new Date(timestamp);
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 export function WorkspaceSidebar({
   isOpen,
   onToggle,
@@ -314,18 +323,23 @@ export function WorkspaceSidebar({
                               )}
                             </div>
 
-                            {/* 会话删除按钮 */}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRemoveSession(session.id);
-                              }}
-                              className="opacity-0 group-hover/session:opacity-100 p-1 text-zinc-500 hover:text-rose-400 hover:bg-zinc-700/60 rounded transition-opacity"
-                              title="删除会话"
-                            >
-                              <Trash2Icon className="size-3" />
-                            </button>
+                            {/* 右侧：时间显示与会话删除按钮 */}
+                            <div className="flex items-center gap-1.5 shrink-0 ml-1">
+                              <span className="text-[11px] text-zinc-500 tabular-nums select-none session-time">
+                                {formatSessionTime(session.updatedAt || session.createdAt)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onRemoveSession(session.id);
+                                }}
+                                className="opacity-0 group-hover/session:opacity-100 p-0.5 text-zinc-500 hover:text-rose-400 hover:bg-zinc-700/60 rounded transition-opacity"
+                                title="删除会话"
+                              >
+                                <Trash2Icon className="size-3" />
+                              </button>
+                            </div>
                           </div>
                         );
                       })
@@ -341,6 +355,7 @@ export function WorkspaceSidebar({
         <div className="border-t border-zinc-800/40 p-2.5">
           <button
             type="button"
+            data-testid="open-settings-modal-btn"
             onClick={onOpenSettings}
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-[12.5px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition-colors"
           >

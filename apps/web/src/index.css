@@ -297,14 +297,132 @@ html.light [data-streamdown="table-wrapper"] button:hover {
   color: #0f172a !important;
 }
 
-/* 提示框与弹窗浅色适配 */
+/* ================= 提示框浅色规范：全灰白底色，彻底消除黑色小三角 ================= */
 html.light [data-slot="tooltip-content"] {
+  background-color: #f4f4f5 !important;
+  border-color: #e4e4e7 !important;
+  color: #18181b !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+}
+html.light [data-slot="tooltip-content"] p,
+html.light [data-slot="tooltip-content"] span {
+  color: #18181b !important;
+}
+html.light [data-slot="tooltip-arrow"],
+html.light [data-slot="tooltip-content"] [data-slot="tooltip-arrow"],
+html.light svg[data-slot="tooltip-arrow"] {
+  background-color: #f4f4f5 !important;
+  border-color: #e4e4e7 !important;
+  fill: #f4f4f5 !important;
+}
+
+/* ================= 模型与供应商设置弹窗浅色主题优化 ================= */
+html.light .modal-panel {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+}
+html.light .modal-header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+html.light .modal-header h2 {
+  color: #0f172a !important;
+}
+/* 弹窗所有输入框与下拉选择框：纯白底色、清晰浅灰边框、深黑文字 */
+html.light .modal-panel input,
+html.light .modal-panel select,
+html.light .settings-input {
   background-color: #ffffff !important;
   border-color: #cbd5e1 !important;
   color: #0f172a !important;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1) !important;
 }
-html.light [data-slot="tooltip-content"] p {
+html.light .modal-panel input::placeholder {
+  color: #94a3b8 !important;
+}
+html.light .modal-panel label span {
+  color: #475569 !important;
+}
+/* 可用模型列表卡片外框：纯白背景 */
+html.light .settings-models-box {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+html.light .settings-models-label {
   color: #0f172a !important;
+}
+/* 可用模型列表滚动区域（原 bg-black/60 导致发灰严重）：纯白明亮背景，彻底消除脏灰色 */
+html.light .settings-model-list-scroll {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+/* 默认选中的模型项：高雅浅灰背景 + 深黑字体 */
+html.light .settings-model-item.is-default {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+html.light .settings-model-item:not(.is-default) {
+  color: #334155 !important;
+}
+html.light .settings-model-item:not(.is-default):hover {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+/* 默认模型徽章 */
+html.light .settings-default-badge {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+/* 模型空状态提示 */
+html.light .settings-model-empty {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  color: #64748b !important;
+}
+/* “获取远程模型列表”按钮：亮白浅灰高雅按钮，消除重灰 */
+html.light .settings-fetch-models-btn {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+html.light .settings-fetch-models-btn:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+}
+/* “添加模型”按钮 */
+html.light .settings-add-model-btn {
+  background-color: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #0f172a !important;
+}
+html.light .settings-add-model-btn:hover {
+  background-color: #e2e8f0 !important;
+}
+/* “测试连接”按钮 */
+html.light .settings-test-btn {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+html.light .settings-test-btn:hover {
+  background-color: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+}
+/* “保存修改”主按钮 */
+html.light .settings-save-btn {
+  background-color: #0f172a !important;
+  color: #ffffff !important;
+}
+html.light .settings-save-btn:hover {
+  background-color: #000000 !important;
+}
+/* 侧边栏会话时间颜色适配 */
+html.light .session-time {
+  color: #64748b !important;
+}
+html.light .sidebar-session-item[data-active="true"] .session-time {
+  color: #475569 !important;
+  font-weight: 500 !important;
 }
 
