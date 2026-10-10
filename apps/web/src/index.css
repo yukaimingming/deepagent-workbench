@@ -106,10 +106,10 @@ body,
 /* ================= 浅色主题模式适配 (Light Theme) ================= */
 html.light,
 [data-theme="light"] {
-  --color-surface-0: #f8fafc;
+  --color-surface-0: #ffffff;
   --color-surface-1: #ffffff;
-  --color-surface-2: #f1f5f9;
-  --color-surface-3: #e2e8f0;
+  --color-surface-2: #f8fafc;
+  --color-surface-3: #f1f5f9;
   --color-border-subtle: #e2e8f0;
   --color-border-strong: #cbd5e1;
   --color-text-primary: #0f172a;
@@ -123,24 +123,25 @@ html.light,
 
 html.light body,
 html.light #root {
-  background-color: #f8fafc !important;
+  background-color: #ffffff !important;
   color: #0f172a !important;
 }
 
-/* 核心容器与布局背景浅色切换 */
+/* 核心容器与布局背景浅色切换：纯白 */
 html.light .bg-black {
-  background-color: #f8fafc !important;
+  background-color: #ffffff !important;
 }
 html.light .bg-zinc-950,
 html.light .bg-zinc-950\/70,
-html.light .bg-zinc-950\/60 {
+html.light .bg-zinc-950\/60,
+html.light .bg-zinc-950\/40 {
   background-color: #ffffff !important;
 }
 html.light .bg-zinc-900,
 html.light .bg-zinc-900\/80,
 html.light .bg-zinc-900\/90,
 html.light .bg-zinc-900\/60 {
-  background-color: #f1f5f9 !important;
+  background-color: #f8fafc !important;
 }
 html.light .bg-\[\#09090b\],
 html.light .bg-\[\#0c0c0e\],
@@ -168,20 +169,131 @@ html.light .border-zinc-800\/80,
 html.light .border-zinc-800\/60,
 html.light .border-zinc-800\/40,
 html.light .border-zinc-700,
+html.light .border-zinc-700\/80,
 html.light .border-zinc-700\/60 {
   border-color: #e2e8f0 !important;
 }
 
 /* 悬浮状态适配 */
 html.light .hover\:bg-zinc-800:hover {
-  background-color: #e2e8f0 !important;
+  background-color: #f1f5f9 !important;
 }
 html.light .hover\:bg-zinc-900:hover,
 html.light .hover\:bg-zinc-900\/60:hover {
-  background-color: #f1f5f9 !important;
+  background-color: #f8fafc !important;
 }
 html.light .hover\:text-white:hover,
 html.light .hover\:text-zinc-200:hover {
+  color: #0f172a !important;
+}
+
+/* ================= 侧边栏聊天记录列表浅色模式适配 ================= */
+/* 选中项：柔和淡灰背景 + 清晰深色文字 + 细腻边框，绝不黑成一团 */
+html.light .sidebar-session-item[data-active="true"],
+html.light .sidebar-session-item.bg-zinc-800,
+html.light .bg-zinc-800 {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  border-color: #e2e8f0 !important;
+}
+html.light .sidebar-session-item[data-active="true"] span,
+html.light .sidebar-session-item[data-active="true"] .truncate {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+}
+html.light .sidebar-session-item[data-active="true"] .bg-zinc-200 {
+  background-color: #0f172a !important;
+}
+/* 未选中项：柔和灰字，悬浮时浅白高亮 */
+html.light .sidebar-session-item[data-active="false"] {
+  color: #475569 !important;
+}
+html.light .sidebar-session-item[data-active="false"]:hover {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+html.light .sidebar-session-item[data-active="false"] .border-zinc-500 {
+  border-color: #94a3b8 !important;
+}
+
+/* ================= 用户消息气泡与输入框浅色适配 ================= */
+html.light .group\/user .bg-zinc-900,
+html.light .group\/user .bg-zinc-900\/90 {
+  background-color: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.04) !important;
+}
+html.light .group\/user .bg-zinc-900 p,
+html.light .group\/user .bg-zinc-900\/90 p {
+  color: #0f172a !important;
+}
+html.light .group\/user textarea {
+  color: #0f172a !important;
+}
+html.light [data-slot="prompt-input"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
+}
+html.light [data-slot="prompt-input"] textarea {
+  color: #0f172a !important;
+}
+html.light [data-slot="prompt-input"] textarea::placeholder {
+  color: #94a3b8 !important;
+}
+html.light [data-testid="workspace-mode-selector"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* ================= 消息区表格浅色主题规范：表头灰白，表格区纯白 ================= */
+html.light [data-streamdown="table-wrapper"] .overflow-x-auto,
+html.light .table-container {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04) !important;
+}
+html.light [data-streamdown="table"],
+html.light .markdown-table-body {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+/* 表格标题/表头（th）：灰白色背景 */
+html.light [data-streamdown="table"] thead,
+html.light .markdown-table-body thead {
+  background-color: #f1f5f9 !important;
+}
+html.light [data-streamdown="table"] th,
+html.light .markdown-table-body th {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  font-weight: 600 !important;
+}
+/* 表格内容区（td）：纯白背景 */
+html.light [data-streamdown="table"] tbody,
+html.light .markdown-table-body tbody {
+  background-color: #ffffff !important;
+}
+html.light [data-streamdown="table"] td,
+html.light .markdown-table-body td {
+  background-color: #ffffff !important;
+  color: #334155 !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+/* 悬浮行高亮 */
+html.light [data-streamdown="table"] tr:hover td,
+html.light .markdown-table-body tr:hover td {
+  background-color: #f8fafc !important;
+}
+/* 表格复制/下载按钮 */
+html.light [data-streamdown="table-wrapper"] button {
+  color: #64748b !important;
+}
+html.light [data-streamdown="table-wrapper"] button:hover {
+  background-color: #f1f5f9 !important;
   color: #0f172a !important;
 }
 

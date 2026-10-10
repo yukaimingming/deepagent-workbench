@@ -43,9 +43,15 @@ import {
   SparklesIcon,
   ArrowRightIcon,
   PencilIcon,
-  ArrowUpIcon,
   TerminalIcon,
+  CornerDownLeftIcon,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../../components/ui/tooltip.js";
 import { cn } from "../../lib/utils.js";
 import type { Activity, ChatMessage } from "./chat-types.js";
 
@@ -81,6 +87,14 @@ function decisionFor(
   const decision = decisions[interruptId] ?? decisions[activity.id];
   if (!decision) return undefined;
   return decision.type === "approve" ? "approve" : "reject";
+}
+
+/** 格式化消息发送时间为 HH:mm 格式（例如 14:14） */
+function formatMessageTime(createdAt?: number): string {
+  const d = createdAt ? new Date(createdAt) : new Date();
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 export function ChatMessages({
@@ -198,57 +212,110 @@ export function ChatMessages({
               const isLast = idx === messages.length - 1;
               const isEditing = editingMessageId === message.id;
 
+
               // 用户消息渲染
               if (isUser) {
+                const messageTime = formatMessageTime(message.createdAt);
+                const isCopied = copiedId === message.id;
+
                 return (
                   <div key={message.id} className="group/user flex flex-col items-end w-full">
                     {isEditing ? (
-                      /* 内联编辑模式 */
-                      <div className="w-full max-w-[85%] rounded-2xl border border-zinc-700 bg-zinc-900 p-3 shadow-lg">
+                      /* 内联编辑模式：与提示词输入框风格统一，重新发送按钮完全一致 */
+                      <div className="w-full max-w-[85%] rounded-2xl border border-zinc-700/80 bg-zinc-900 p-3.5 shadow-xl">
                         <textarea
                           value={editingContent}
                           onChange={(e) => setEditingContent(e.target.value)}
-                          className="w-full min-h-[70px] bg-transparent text-[13.5px] text-zinc-100 outline-none resize-none placeholder:text-zinc-500"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                              e.preventDefault();
+                              handleSaveEdit(message.id);
+                            } else if (e.key === "Escape") {
+                              setEditingMessageId(null);
+                            }
+                          }}
+                          className="w-full min-h-[75px] bg-transparent text-[14px] text-zinc-100 outline-none resize-none placeholder:text-zinc-500 leading-relaxed"
                           placeholder="重新编辑消息内容..."
                           autoFocus
                         />
-                        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-zinc-800">
+                        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-zinc-800/80">
                           <button
                             type="button"
                             onClick={() => setEditingMessageId(null)}
-                            className="px-2.5 py-1 text-[11.5px] text-zinc-400 hover:text-zinc-200"
+                            className="px-2.5 py-1 text-[12px] text-zinc-400 hover:text-zinc-200 transition-colors"
                           >
                             取消
                           </button>
+                          {/* 重新发送按钮：与底部提示词输入框样式及图标完全一致 */}
                           <button
                             type="button"
                             onClick={() => handleSaveEdit(message.id)}
-                            className="flex items-center gap-1 px-3 py-1 rounded bg-zinc-100 hover:bg-white text-black font-medium text-[11.5px] transition-colors"
+                            disabled={!editingContent.trim()}
+                            className="size-8 rounded-lg bg-zinc-100 text-black hover:bg-white disabled:opacity-30 disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors shadow-none flex items-center justify-center cursor-pointer disabled:cursor-not-allowed"
+                            title="重新发送 (Enter)"
                           >
-                            <ArrowUpIcon className="size-3" />
-                            <span>重新发送</span>
+                            <CornerDownLeftIcon className="size-4" />
                           </button>
                         </div>
                       </div>
                     ) : (
-                      /* 普通气泡展示模式 */
-                      <div className="flex items-start gap-1.5 max-w-[85%]">
-                        {/* 悬浮操作按钮：重新编辑 */}
-                        {onEditMessage && (
-                          <button
-                            type="button"
-                            onClick={() => startEditMessage(message.id, message.content)}
-                            className="opacity-0 group-hover/user:opacity-100 p-1 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded transition-opacity"
-                            title="重新编辑此消息"
-                          >
-                            <PencilIcon className="size-3.5" />
-                          </button>
-                        )}
-
-                        <div className="rounded-2xl bg-zinc-900 px-4 py-2.5 text-[14px] text-zinc-100 shadow-sm border border-zinc-800/80">
+                      /* 普通气泡展示模式：按用户截图样式呈现（气泡 + 下方时间戳 + 复制 + 编辑） */
+                      <div className="flex flex-col items-end max-w-[85%] space-y-1">
+                        {/* 气泡主体 */}
+                        <div className="rounded-2xl bg-zinc-900/90 px-4 py-2.5 text-[14px] text-zinc-100 shadow-sm border border-zinc-800/80">
                           <p className="whitespace-pre-wrap break-words leading-relaxed">
                             {message.content}
                           </p>
+                        </div>
+
+                        {/* 气泡右下方元数据操作栏：时间戳、复制、编辑（完全对齐用户上传截图） */}
+                        <div className="flex items-center gap-1.5 pt-0.5 text-zinc-400">
+                          {/* 时间戳 */}
+                          <span className="text-[12px] text-zinc-500 select-none tabular-nums font-normal mr-0.5">
+                            {messageTime}
+                          </span>
+
+                          {/* 复制按钮 */}
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(message.id, message.content)}
+                                  className="flex size-6 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 transition-colors cursor-pointer"
+                                >
+                                  {isCopied ? (
+                                    <CheckIcon className="size-3.5 text-emerald-400" />
+                                  ) : (
+                                    <CopyIcon className="size-3.5" />
+                                  )}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">
+                                {isCopied ? "已复制" : "复制"}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+
+                          {/* 编辑按钮（悬停弹出黑底白字 Tooltip） */}
+                          {onEditMessage && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditMessage(message.id, message.content)}
+                                    className="flex size-6 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 transition-colors cursor-pointer"
+                                  >
+                                    <PencilIcon className="size-3.5" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">
+                                  编辑
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
                         </div>
                       </div>
                     )}

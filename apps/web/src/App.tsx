@@ -324,11 +324,21 @@ export function App() {
     handleSend(userMessage.content);
   };
 
-  /** 重新编辑用户消息并发送：彻底剔除被编辑消息，绝不生成重复内容 */
   const handleEditMessage = (messageId: string, newContent: string): void => {
     rollbackBeforeMessage(messageId);
     handleSend(newContent);
   };
+
+  useEffect(() => {
+    (window as unknown as { __deepagentTestHooks?: unknown }).__deepagentTestHooks = {
+      getState: () => state,
+      loadState,
+      handleSend,
+      handleEditMessage,
+      handleNewSession,
+      sessionsManager,
+    };
+  }, [state, loadState, handleSend, handleNewSession, sessionsManager]);
 
   const hasDecisions = Object.keys(state.pendingDecisions).length > 0;
   const pendingInterrupts = state.run.interrupts;

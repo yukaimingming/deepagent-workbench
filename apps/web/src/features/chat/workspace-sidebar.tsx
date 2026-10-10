@@ -286,11 +286,13 @@ export function WorkspaceSidebar({
                               onSelect(group.folderPath);
                               onSelectSession(session.id);
                             }}
-                            className={`group/session relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-pointer transition-colors ${
+                            className={`group/session sidebar-session-item relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-pointer transition-colors ${
                               isActive
                                 ? "bg-zinc-800 text-white font-medium shadow-xs"
                                 : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
                             }`}
+                            data-active={isActive ? "true" : "false"}
+                            data-session-id={session.id}
                           >
                             {/* 左侧状态圆点：后台执行中显示绿色脉冲 */}
                             <div className="flex items-center gap-2.5 min-w-0 flex-1">

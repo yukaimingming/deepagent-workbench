@@ -34,6 +34,8 @@ export interface ChatMessage {
   reasoningStartedAt?: number;
   /** 思考实际累计耗时（秒） */
   reasoningDuration?: number;
+  /** 消息创建时间戳（毫秒） */
+  createdAt?: number;
 }
 
 /** 待处理的人工审批决策。 */
@@ -146,7 +148,13 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         ...state,
         messages: [
           ...state.messages,
-          { id: action.id, role: "user", content: action.content, streaming: false },
+          {
+            id: action.id,
+            role: "user",
+            content: action.content,
+            streaming: false,
+            createdAt: Date.now(),
+          },
         ],
       };
 

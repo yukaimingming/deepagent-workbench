@@ -174,11 +174,11 @@ export const MarkdownTable = memo(function MarkdownTable({
       </div>
 
       {/* 表格主体渲染 */}
-      <div className="overflow-x-auto rounded-lg border border-zinc-800/80 bg-zinc-950/40">
+      <div className="overflow-x-auto rounded-lg border border-zinc-800/80 bg-zinc-950/40 table-container">
         <table
           ref={tableRef}
           className={cn(
-            "w-full border-collapse text-[13px] text-zinc-200",
+            "w-full border-collapse text-[13px] text-zinc-200 markdown-table-body",
             "[&_th]:border-b [&_th]:border-zinc-800 [&_th]:bg-zinc-900/60 [&_th]:px-3.5 [&_th]:py-2.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-zinc-100",
             "[&_td]:border-b [&_td]:border-zinc-800/50 [&_td]:px-3.5 [&_td]:py-2.5",
             "[&_tr:last-child_td]:border-b-0",
