@@ -61,7 +61,10 @@ describe("buildTurnProcessTimeline", () => {
     const messages = [
       { id: "user", role: "user" as const, content: "检查工程", streaming: false, createdAt: 100 },
       { id: "analysis", role: "assistant" as const, content: "我先查看目录结构。", streaming: false, runId: "run-1", createdAt: 200 },
-      { id: "final", role: "assistant" as const, content: "检查完成。", streaming: false, runId: "run-1", createdAt: 500 },
+      {
+        id: "final", role: "assistant" as const, content: "检查完成。", reasoning: "现在整理最终答复。",
+        streaming: false, reasoningStreaming: false, runId: "run-1", createdAt: 500,
+      },
     ];
     const activities: Activity[] = [
       { id: "tool-1", kind: "tool", status: "completed", title: "ls", startedAt: 300, runId: "run-1" },
@@ -74,9 +77,27 @@ describe("buildTurnProcessTimeline", () => {
       "message:analysis",
       "tool-1",
       "tool-2",
+      "reasoning:final",
     ]);
     expect(timeline.ownedMessageIds.has("analysis")).toBe(true);
     expect(timeline.ownedMessageIds.has("final")).toBe(false);
+    expect(entries.some((item) => item.kind === "assistant" && item.id === "reasoning:final")).toBe(true);
+  });
+
+  it("正文后续收到推理增量时仍将正文保留在折叠时间线之外", () => {
+    const messages = [
+      { id: "user", role: "user" as const, content: "查看目录", streaming: false, createdAt: 100 },
+      { id: "answer", role: "assistant" as const, content: "最终正文应始终可见。", streaming: false, runId: "run-1", createdAt: 300 },
+      { id: "reasoning", role: "assistant" as const, content: "", reasoning: "补充的模型推理原文。", streaming: false, reasoningStreaming: false, runId: "run-1", createdAt: 400 },
+    ];
+    const timeline = buildTurnProcessTimeline(messages, [
+      { id: "tool-1", kind: "tool", status: "completed", title: "ls", startedAt: 200, runId: "run-1" },
+    ]);
+    const entries = timeline.byFinalMessage.get("answer") ?? [];
+
+    expect(timeline.ownedMessageIds.has("answer")).toBe(false);
+    expect(timeline.ownedMessageIds.has("reasoning")).toBe(true);
+    expect(entries.some((item) => item.kind === "assistant" && item.id === "reasoning:reasoning")).toBe(true);
   });
 
   it("把原始模型推理放进过程顺序中，并保留原文", () => {

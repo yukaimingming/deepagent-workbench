@@ -86,7 +86,9 @@ export function buildTurnProcessTimeline(
     let end = index + 1;
     while (end < messages.length && messages[end]?.role !== "user") end += 1;
     const turnMessages = messages.slice(start, end).filter((item) => item.role === "assistant");
-    const finalMessage = turnMessages.at(-1);
+    // 正式答复可能早于单独到达的推理增量；优先选择本轮最后一条含正文的消息，
+    // 这样最终正文始终由独立消息区渲染，不会被收进可折叠过程时间线。
+    const finalMessage = [...turnMessages].reverse().find((item) => item.content.trim()) ?? turnMessages.at(-1);
     if (!finalMessage || finalMessage.id !== message.id) continue;
     const runIds = new Set(turnMessages.map((item) => item.runId).filter((id): id is string => Boolean(id)));
     const firstTime = turnMessages[0]?.createdAt ?? 0;
@@ -110,7 +112,7 @@ export function buildTurnProcessTimeline(
           streaming: item.reasoningStreaming,
           section: "reasoning",
         });
-        ownedMessageIds.add(item.id);
+        if (item.id !== finalMessage.id) ownedMessageIds.add(item.id);
       }
       if (item.id !== finalMessage.id && item.content.trim()) {
         items.push({
@@ -305,18 +307,22 @@ export function ChatMessages({
               );
             })()}
 
-            <div className="grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2 text-left">
+            <div className="grid w-full max-w-xl grid-cols-1 gap-2 text-left sm:grid-cols-2">
               {[
                 { label: "查看工作区文件", prompt: "查看当前工作区目录下的所有文件并说明用途。" },
-                { label: "规划待办开发任务", prompt: "为当前工作区规划一份构建 TypeScript CLI 工具的待办清单并开始执行。" },
-                { label: "创建项目说明文档", prompt: "在工作区创建 README.md 文件，写入工作台的功能特性与使用指南。" },
-                { label: "检查系统运行环境", prompt: "执行 Shell 命令检查当前系统的 Node.js 版本和操作系统平台。" },
+                { label: "分析项目结构", prompt: "分析当前工作区的技术栈、入口文件、主要模块和模块之间的调用关系，只做分析，先不要修改文件。" },
+                { label: "搜索代码与配置", prompt: "在当前工作区搜索与我指定功能相关的代码和配置，列出文件路径、关键实现和调用关系。" },
+                { label: "规划待办任务", prompt: "根据当前工作区的现状规划实现目标所需的待办清单，拆分为可执行步骤，先不要执行。" },
+                { label: "实现功能需求", prompt: "先检查当前工作区相关代码和项目约定，再按需求实现功能，保留现有行为并总结改动。" },
+                { label: "排查并修复问题", prompt: "检查当前工作区中与问题相关的实现，定位原因，做最小范围修复，并说明验证结果。" },
+                { label: "创建或更新文档", prompt: "阅读当前工作区的实现和现有文档，创建或更新中文 Markdown 使用说明，确保内容与代码一致。" },
+                { label: "检查环境与 Git 状态", prompt: "检查当前工作区的运行环境和 Git 工作区状态，汇总 Node.js、包管理器、当前分支和未提交改动；不要修改文件。" },
               ].map((item) => (
                 <button
                   key={item.label}
                   type="button"
                   onClick={() => onQuickPrompt?.(item.prompt)}
-                  className="flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 text-[12.5px] text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900 hover:text-white transition-all text-left"
+                  className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 text-left text-[12.5px] text-zinc-300 transition-all hover:border-zinc-700 hover:bg-zinc-900 hover:text-white"
                 >
                   <span className="truncate mr-1">{item.label}</span>
                   <ArrowRightIcon className="size-3.5 text-zinc-500 shrink-0" />
@@ -494,7 +500,10 @@ export function ChatMessages({
               const messageIsInTimeline = timelineOwnedMessageIds.has(message.id);
               if (messageIsInTimeline && processItems.length === 0) return null;
               const reasoningText = message.reasoning ?? "";
-              const hasReasoning = reasoningText.length > 0 && !messageIsInTimeline;
+              const reasoningIsInTimeline = processItems.some(
+                (item) => item.kind === "assistant" && item.section === "reasoning" && item.id === `reasoning:${message.id}`,
+              );
+              const hasReasoning = reasoningText.length > 0 && !messageIsInTimeline && !reasoningIsInTimeline;
               // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
               const isReasoningStreaming = message.reasoningStreaming === true;
               const hasRunningTool = currentToolActivities.some((a) => a.status === "running");
@@ -506,7 +515,7 @@ export function ChatMessages({
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
                   {/* 1. 思考组件（Reasoning）：生命周期自发送时刻起全程唯一且稳定，秒表与打字内容毫秒级同步 */}
-                  {(hasReasoning || (isReasoningStreaming && !messageIsInTimeline)) ? (
+                  {(hasReasoning || (isReasoningStreaming && !messageIsInTimeline && !reasoningIsInTimeline)) ? (
                     <Reasoning
                       className="mb-1 w-full"
                       isStreaming={isReasoningStreaming}

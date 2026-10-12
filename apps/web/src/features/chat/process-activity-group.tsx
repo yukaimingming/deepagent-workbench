@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { Activity } from "@deepagent/shared";
 import { MessageResponse } from "../../components/ai-elements/message.js";
+import { Shimmer } from "../../components/ai-elements/shimmer.js";
 
 export type ProcessTimelineItem =
   | {
@@ -176,7 +177,13 @@ export function ProcessActivityGroup({
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 border-b border-[var(--color-border-subtle)] py-2.5 text-left text-[15px] text-[var(--color-text-secondary)] transition-colors"
       >
-        <span className="font-medium">{summary}</span>
+        {activeCount > 0 ? (
+          <Shimmer className="font-medium text-[var(--color-state-running)] [--color-foreground:var(--color-state-running)] [--color-muted-foreground:var(--color-state-running)]">
+            {summary}
+          </Shimmer>
+        ) : (
+          <span className="font-medium">{summary}</span>
+        )}
         {failedCount > 0 && <span className="text-sm text-[var(--color-state-error)]">（{failedCount} 项失败）</span>}
         {expanded ? (
           <ChevronDownIcon className="ml-0.5 size-3.5 -rotate-180 transition-transform" />
