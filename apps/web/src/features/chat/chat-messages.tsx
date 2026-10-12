@@ -100,7 +100,7 @@ export function buildTurnProcessTimeline(
       if (nextTurnTime !== undefined && activity.startedAt >= nextTurnTime) return false;
       return true;
     });
-    if (turnActivities.length === 0) continue;
+    if (turnActivities.length === 0 && !turnMessages.some((item) => Boolean(item.reasoning))) continue;
     const items: ProcessTimelineItem[] = [];
     for (const item of turnMessages) {
       const createdAt = item.createdAt ?? 0;
@@ -506,7 +506,9 @@ export function ChatMessages({
               const hasReasoning = reasoningText.length > 0 && !messageIsInTimeline && !reasoningIsInTimeline;
               // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
               const isReasoningStreaming = message.reasoningStreaming === true;
-              const hasRunningTool = currentToolActivities.some((a) => a.status === "running");
+              const hasRunningTool = currentToolActivities.some((a) =>
+                a.status === "running" || a.status === "pending" || a.status === "waiting_approval",
+              );
 
               // 严格时序铁律：思考必须完全结束（!isReasoningStreaming）且无正在运行工具，才允许流式输出正式内容
               const shouldShowMessageContent =
@@ -540,9 +542,9 @@ export function ChatMessages({
 
                   {/* 3. 工具调用提示：完全去掉复杂卡片，按工具名归一化展示干净的单行提示 */}
                   <ProcessActivityGroup
-                    key={`${message.id}-${message.content.trim() ? "answer" : "process"}`}
+                    key={`${message.id}-${shouldShowMessageContent && message.content.trim() ? "answer" : "process"}`}
                     items={processItems}
-                    finalAnswerStarted={message.content.trim().length > 0}
+                    finalAnswerStarted={shouldShowMessageContent && message.content.trim().length > 0}
                     durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
                     runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
                   />

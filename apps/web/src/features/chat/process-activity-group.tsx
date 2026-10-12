@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BrainCircuitIcon,
   CheckCircle2Icon,
@@ -10,7 +10,6 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import type { Activity } from "@deepagent/shared";
-import { MessageResponse } from "../../components/ai-elements/message.js";
 import { Shimmer } from "../../components/ai-elements/shimmer.js";
 
 export type ProcessTimelineItem =
@@ -154,7 +153,7 @@ export function ProcessActivityGroup({
   durationMs,
 }: ProcessActivityGroupProps) {
   const [expanded, setExpanded] = useState(!finalAnswerStarted);
-  if (items.length === 0) return null;
+  const [now, setNow] = useState(() => Date.now());
 
   const activities = items.flatMap((item) => item.kind === "activity" ? [item.activity] : []);
   const activeCount = activities.filter((activity) =>
@@ -163,11 +162,21 @@ export function ProcessActivityGroup({
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
   const isComplete = runCompleted && activeCount === 0 && !hasStreamingMessage;
-  const summary = isComplete
-    ? `已完成${typeof durationMs === "number" ? `，用时 ${formatElapsedDuration(durationMs)}` : ""}`
-    : activeCount > 0
-      ? "正在执行"
-      : "执行过程";
+  const startedAt = items.length > 0
+    ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
+    : now;
+  const endedAt = Math.max(startedAt, ...activities.map((activity) => activity.endedAt ?? activity.startedAt));
+  const elapsedMs = isComplete
+    ? durationMs ?? endedAt - startedAt
+    : Math.max(durationMs ?? 0, now - startedAt);
+  const statusLabel = isComplete ? "已完成分析" : "正在分析";
+
+  useEffect(() => {
+    if (isComplete) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isComplete]);
+  if (items.length === 0) return null;
 
   return (
     <section className="process-group my-3 w-full text-[var(--color-text-primary)]">
@@ -177,14 +186,15 @@ export function ProcessActivityGroup({
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full items-center gap-2 border-b border-[var(--color-border-subtle)] py-2.5 text-left text-[15px] text-[var(--color-text-secondary)] transition-colors"
       >
-        {activeCount > 0 ? (
-          <Shimmer className="font-medium text-[var(--color-state-running)] [--color-foreground:var(--color-state-running)] [--color-muted-foreground:var(--color-state-running)]">
-            {summary}
-          </Shimmer>
+        {!isComplete ? (
+          <span className="flex items-center gap-1.5 text-[13px]">
+            <Shimmer as="span" duration={2} spread={3} className="font-medium">{statusLabel}</Shimmer>
+            <span className="tabular-nums text-[var(--color-text-muted)]">，用时 {formatElapsedDuration(elapsedMs)}</span>
+          </span>
         ) : (
-          <span className="font-medium">{summary}</span>
+          <span className="text-[13px] font-medium">{statusLabel}，用时 {formatElapsedDuration(elapsedMs)}</span>
         )}
-        {failedCount > 0 && <span className="text-sm text-[var(--color-state-error)]">（{failedCount} 项失败）</span>}
+        {failedCount > 0 && <span className="text-xs text-[var(--color-state-error)]">（{failedCount} 项失败）</span>}
         {expanded ? (
           <ChevronDownIcon className="ml-0.5 size-3.5 -rotate-180 transition-transform" />
         ) : (
@@ -200,32 +210,30 @@ export function ProcessActivityGroup({
               if (item.section === "reasoning") {
                 return (
                   <details key={item.id} className="process-activity-enter group" style={staggerStyle}>
-                    <summary className="flex cursor-pointer list-none items-center gap-2.5 text-[15px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
-                      <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
-                      <BrainCircuitIcon className="size-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                      <span>{item.streaming ? "正在思考" : "思考"}</span>
-                      <span className="min-w-0 truncate text-[13px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>
+                    <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-[13px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
+                      <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
+                      {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="shrink-0 font-medium">思考</Shimmer> : <span className="shrink-0">思考</span>}
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>
+                      <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
                     </summary>
-                    <div className="ml-[30px] mt-2 border-l border-[var(--color-border-subtle)] pl-4 text-[14px] leading-[1.7] text-[var(--color-text-secondary)]">
-                      <MessageResponse mode={item.streaming ? "streaming" : "static"}>{item.content}</MessageResponse>
+                    <div className="ml-[26px] mt-1.5 whitespace-pre-wrap break-words border-l border-[var(--color-border-subtle)] pl-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+                      {item.content}
                     </div>
                   </details>
                 );
               }
               return (
                 <article key={item.id} className="process-activity-enter" style={staggerStyle}>
-                  <div className="flex items-center gap-2.5 text-[15px] text-[var(--color-text-secondary)]">
+                  <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
                     {item.streaming ? (
-                      <BrainCircuitIcon className="size-[18px] shrink-0 text-[var(--color-text-muted)]" />
+                      <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
                     ) : (
-                      <CheckCircle2Icon className="size-[18px] shrink-0 text-[var(--color-text-muted)]" />
+                      <CheckCircle2Icon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
                     )}
-                    <span>{item.streaming ? item.label.replace(/^已完成/, "正在") : item.label}</span>
+                    {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{item.label.replace(/^已完成/, "正在")}</Shimmer> : <span>{item.label}</span>}
                   </div>
-                  <div className="mt-3 whitespace-pre-wrap break-words text-[16px] font-medium leading-[1.65] text-[var(--color-text-primary)]">
-                    <MessageResponse mode={item.streaming ? "streaming" : "static"}>
-                      {item.content}
-                    </MessageResponse>
+                  <div className="mt-1.5 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--color-text-primary)]">
+                    {item.content}
                   </div>
                 </article>
               );
@@ -241,14 +249,14 @@ export function ProcessActivityGroup({
                   : "正在执行子任务";
               const description = detail?.goal ?? detail?.name ?? activity.title;
               return (
-                <div key={item.id} className="process-activity-enter text-[15px] text-[var(--color-text-secondary)]" style={staggerStyle}>
+                <div key={item.id} className="process-activity-enter text-[13px] text-[var(--color-text-secondary)]" style={staggerStyle}>
                   <div className="flex items-center gap-2.5">
-                    <BrainCircuitIcon className="size-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                    <span>{label}</span>
+                    <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
+                    {activity.status === "running" || activity.status === "pending" ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{label}</Shimmer> : <span>{label}</span>}
                     {description && <span className="truncate">{description}</span>}
                   </div>
                   {detail?.resultSummary && (
-                    <p className="ml-[30px] mt-2 whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--color-text-primary)]">
+                    <p className="ml-[26px] mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--color-text-primary)]">
                       {detail.resultSummary}
                     </p>
                   )}
@@ -267,20 +275,20 @@ export function ProcessActivityGroup({
                 ? "text-[var(--color-state-warn)]"
                 : "text-[var(--color-text-secondary)]";
             return (
-              <div key={item.id} className={`process-activity-enter flex min-w-0 items-start gap-2.5 text-[15px] ${tone}`} style={staggerStyle}>
-                <Icon className="mt-0.5 size-[18px] shrink-0 text-[var(--color-text-muted)]" />
+              <div key={item.id} className={`process-activity-enter flex min-w-0 items-start gap-2 text-[13px] ${tone}`} style={staggerStyle}>
+                <Icon className="mt-0.5 size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
                 <div className="min-w-0 flex-1">
                   <details className="group">
-                    <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
-                      <ChevronDownIcon className="size-3.5 shrink-0 self-center transition-transform group-open:rotate-180" />
-                      <span>{activityLabel(activity)}</span>
+                    <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
+                      {activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval" ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{activityLabel(activity)}</Shimmer> : <span>{activityLabel(activity)}</span>}
                       {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
+                      <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
                     </summary>
-                    <div className="mt-2 space-y-3 pl-5">
+                    <div className="mt-2 space-y-3">
                       {sections.map((section) => (
                         <section key={section.label}>
-                          <h4 className="mb-1 text-[12px] font-medium text-[var(--color-text-muted)]">{section.label}</h4>
-                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-3 font-mono text-[12px] leading-relaxed text-[var(--color-text-primary)]">{section.value}</pre>
+                          <h4 className="mb-1 text-[11px] font-medium text-[var(--color-text-muted)]">{section.label}</h4>
+                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2.5 font-mono text-[11px] leading-relaxed text-[var(--color-text-primary)]">{section.value}</pre>
                         </section>
                       ))}
                       {detail?.truncated === true && <p className="text-[12px] text-[var(--color-text-muted)]">服务端返回的结果已截断</p>}
