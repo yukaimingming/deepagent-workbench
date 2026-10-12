@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   formatElapsedDuration,
+  hasActiveProcess,
   getToolActionLabel,
   ProcessActivityGroup,
 } from "../src/features/chat/process-activity-group.js";
@@ -35,8 +36,8 @@ describe("ProcessActivityGroup 状态展示", () => {
   it("正文流式结束后立即汇总为完成，即使运行状态事件尚未结束", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
-      finalAnswerStarted: true,
       finalAnswerComplete: true,
+      finalAnswerStreaming: false,
       runCompleted: false,
       durationMs: 83_000,
     }));
@@ -47,11 +48,24 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain('aria-expanded="false"');
   });
 
+  it("最终正文仍在流式输出时保持过程详情展开", () => {
+    const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
+      items: [reasoningItem],
+      finalAnswerComplete: false,
+      finalAnswerStreaming: true,
+      runCompleted: true,
+      durationMs: 83_000,
+    }));
+
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("正在分析，用时 1分23秒");
+  });
+
   it("运行中将分析状态和用时放在同一个 Shimmer 文本中", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
-      finalAnswerStarted: false,
       finalAnswerComplete: false,
+      finalAnswerStreaming: false,
       runCompleted: false,
       durationMs: 0,
     }));
@@ -60,5 +74,23 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain("bg-clip-text");
     expect(html).not.toContain("正在思考");
     expect(html).toContain("模型返回的原始推理内容。");
+  });
+
+  it("工具、子 Agent 或过程消息仍活动时阻止最终正文抢先出现", () => {
+    const activeSubagent = {
+      id: "subagent:1",
+      kind: "activity" as const,
+      activity: { id: "subagent:1", kind: "subagent" as const, status: "pending" as const, title: "子任务", startedAt: Date.now() },
+    };
+    const activeTool = {
+      id: "tool:1",
+      kind: "activity" as const,
+      activity: { id: "tool:1", kind: "tool" as const, status: "running" as const, title: "execute", startedAt: Date.now() },
+    };
+
+    expect(hasActiveProcess([activeSubagent])).toBe(true);
+    expect(hasActiveProcess([activeTool])).toBe(true);
+    expect(hasActiveProcess([{ ...reasoningItem, kind: "assistant" as const, section: "reasoning" as const, streaming: true }])).toBe(true);
+    expect(hasActiveProcess([])).toBe(false);
   });
 });

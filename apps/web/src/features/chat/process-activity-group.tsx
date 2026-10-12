@@ -28,10 +28,17 @@ export type ProcessTimelineItem =
       activity: Activity;
     };
 
+export function hasActiveProcess(items: ProcessTimelineItem[], toolActivities: Activity[] = []): boolean {
+  const isActive = (activity: Activity) =>
+    activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval";
+  return items.some((item) => item.kind === "assistant" ? item.streaming : isActive(item.activity))
+    || toolActivities.some(isActive);
+}
+
 interface ProcessActivityGroupProps {
   items: ProcessTimelineItem[];
-  finalAnswerStarted: boolean;
   finalAnswerComplete?: boolean;
+  finalAnswerStreaming?: boolean;
   runCompleted?: boolean;
   durationMs?: number;
 }
@@ -149,12 +156,12 @@ function activityLabel(activity: Activity): string {
 
 export function ProcessActivityGroup({
   items,
-  finalAnswerStarted,
   finalAnswerComplete = false,
+  finalAnswerStreaming = false,
   runCompleted = true,
   durationMs,
 }: ProcessActivityGroupProps) {
-  const [expanded, setExpanded] = useState(!finalAnswerStarted);
+  const [expanded, setExpanded] = useState(!finalAnswerComplete);
   const [now, setNow] = useState(() => Date.now());
 
   const activities = items.flatMap((item) => item.kind === "activity" ? [item.activity] : []);
@@ -163,7 +170,9 @@ export function ProcessActivityGroup({
   ).length;
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
-  const isComplete = finalAnswerComplete || (runCompleted && activeCount === 0 && !hasStreamingMessage);
+  const isComplete = finalAnswerComplete || (
+    runCompleted && activeCount === 0 && !hasStreamingMessage && !finalAnswerStreaming
+  );
   const startedAt = items.length > 0
     ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
     : now;

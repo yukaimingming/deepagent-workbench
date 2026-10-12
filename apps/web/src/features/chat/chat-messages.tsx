@@ -29,7 +29,7 @@ import {
   MessageActions as MessageActionsGroup,
   MessageAction,
 } from "../../components/ai-elements/message.js";
-import { ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
+import { hasActiveProcess, ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
 import { DiffCard, type FileChangeSummary } from "./diff-card.js";
 import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
 import { ApprovalCard } from "./approval-card.js";
@@ -496,13 +496,12 @@ export function ChatMessages({
               if (messageIsInTimeline && processItems.length === 0) return null;
               // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
               const isReasoningStreaming = message.reasoningStreaming === true;
-              const hasRunningTool = currentToolActivities.some((a) =>
-                a.status === "running" || a.status === "pending" || a.status === "waiting_approval",
-              );
+              // 最终正文要等整条过程时间线上的推理、工具和子 Agent 活动结束后再开始。
+              const hasActiveTimelineWork = hasActiveProcess(processItems, currentToolActivities);
 
               // 严格时序铁律：思考必须完全结束（!isReasoningStreaming）且无正在运行工具，才允许流式输出正式内容
               const shouldShowMessageContent =
-                !messageIsInTimeline && !isReasoningStreaming && !hasRunningTool && (message.content.length > 0 || message.streaming);
+                !messageIsInTimeline && !isReasoningStreaming && !hasActiveTimelineWork && (message.content.length > 0 || message.streaming);
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
@@ -515,10 +514,10 @@ export function ChatMessages({
 
                   {/* 3. 工具调用提示：完全去掉复杂卡片，按工具名归一化展示干净的单行提示 */}
                   <ProcessActivityGroup
-                    key={`${message.id}-${shouldShowMessageContent && message.content.trim() ? "answer" : "process"}`}
+                    key={`${message.id}-${shouldShowMessageContent && !message.streaming && message.content.trim() ? "complete" : "process"}`}
                     items={processItems}
-                    finalAnswerStarted={shouldShowMessageContent && message.content.trim().length > 0}
                     finalAnswerComplete={shouldShowMessageContent && !message.streaming && message.content.trim().length > 0}
+                    finalAnswerStreaming={shouldShowMessageContent && message.streaming}
                     durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
                     runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
                   />
