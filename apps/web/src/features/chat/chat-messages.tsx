@@ -34,6 +34,9 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "../../components/ai-elements/reasoning.js";
+import { ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
+import { DiffCard, type FileChangeSummary } from "./diff-card.js";
+import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
 import { ApprovalCard } from "./approval-card.js";
 import { TodoCard } from "./todo-card.js";
 import {
@@ -43,7 +46,6 @@ import {
   SparklesIcon,
   ArrowRightIcon,
   PencilIcon,
-  TerminalIcon,
   CornerDownLeftIcon,
 } from "lucide-react";
 import {
@@ -54,17 +56,98 @@ import {
 } from "../../components/ui/tooltip.js";
 import { cn } from "../../lib/utils.js";
 import type { Activity, ChatMessage } from "./chat-types.js";
+import type { RunSnapshot } from "@deepagent/shared";
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
   activities: Activity[];
   error: string | null;
   isRunning?: boolean;
+  runSnapshot?: RunSnapshot;
   onRetry?: (messageId: string) => void;
-  onEditMessage?: (messageId: string, newContent: string) => void;
+  onEditMessage?: (messageId: string, newContent: string, attachments?: ChatAttachment[]) => void;
   onDecide?: (activityId: string, decision: "approve" | "reject") => void;
   decisions?: Record<string, { type: "approve" | "edit" | "reject" }>;
   onQuickPrompt?: (prompt: string) => void;
+}
+
+/** 将每轮助手过程和工具活动按事件时间合并，最终回答仍留在过程时间线之后。 */
+export function buildTurnProcessTimeline(
+  messages: ChatMessage[],
+  activities: Activity[],
+): { byFinalMessage: Map<string, ProcessTimelineItem[]>; ownedMessageIds: Set<string> } {
+  const byFinalMessage = new Map<string, ProcessTimelineItem[]>();
+  const ownedMessageIds = new Set<string>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant") continue;
+    let start = index;
+    while (start > 0 && messages[start - 1]?.role !== "user") start -= 1;
+    let end = index + 1;
+    while (end < messages.length && messages[end]?.role !== "user") end += 1;
+    const turnMessages = messages.slice(start, end).filter((item) => item.role === "assistant");
+    const finalMessage = turnMessages.at(-1);
+    if (!finalMessage || finalMessage.id !== message.id) continue;
+    const runIds = new Set(turnMessages.map((item) => item.runId).filter((id): id is string => Boolean(id)));
+    const firstTime = turnMessages[0]?.createdAt ?? 0;
+    const nextTurnTime = messages[end]?.createdAt;
+    const turnActivities = activities.filter((activity) => {
+      if (activity.kind !== "tool" && activity.kind !== "subagent") return false;
+      if (activity.runId && runIds.size > 0 && !runIds.has(activity.runId)) return false;
+      if (!activity.runId && activity.startedAt < firstTime) return false;
+      if (nextTurnTime !== undefined && activity.startedAt >= nextTurnTime) return false;
+      return true;
+    });
+    if (turnActivities.length === 0) continue;
+    const items: ProcessTimelineItem[] = [];
+    for (const item of turnMessages) {
+      const createdAt = item.createdAt ?? 0;
+      if (item.reasoning) {
+        items.push({
+          id: `reasoning:${item.id}`, kind: "assistant",
+          label: item.reasoningStreaming ? "正在思考" : "已完成分析",
+          content: item.reasoning, startedAt: item.reasoningStartedAt ?? createdAt,
+          streaming: item.reasoningStreaming,
+        });
+        ownedMessageIds.add(item.id);
+      }
+      if (item.id !== finalMessage.id && item.content.trim()) {
+        items.push({
+          id: `message:${item.id}`, kind: "assistant",
+          label: item.streaming ? "正在整理过程" : "已完成分析",
+          content: item.content, startedAt: createdAt, streaming: item.streaming,
+        });
+        ownedMessageIds.add(item.id);
+      }
+    }
+    for (const activity of turnActivities) items.push({ id: activity.id, kind: "activity", activity });
+    items.sort((a, b) => {
+      const at = a.kind === "assistant" ? a.startedAt : a.activity.startedAt;
+      const bt = b.kind === "assistant" ? b.startedAt : b.activity.startedAt;
+      return at - bt || (a.kind === "assistant" ? -1 : 1);
+    });
+    byFinalMessage.set(finalMessage.id, items);
+  }
+  return { byFinalMessage, ownedMessageIds };
+}
+
+export function findPromotedMessageId(
+  messages: ChatMessage[],
+  toolsByMessage: Map<string, Activity[]>,
+): string | null {
+  const latest = [...messages].reverse().find((item) => item.role === "assistant");
+  if (!latest) return null;
+  const runMessages = messages.filter((item) => item.role === "assistant" && item.runId === latest.runId && item.content.trim());
+  if (runMessages.some((item) => (toolsByMessage.get(item.id) ?? []).length === 0)) return null;
+  return runMessages.at(-1)?.id ?? null;
+}
+
+export function shouldHideIntermediateAssistantText(
+  message: Pick<ChatMessage, "id" | "content" | "streaming">,
+  toolActivities: Activity[],
+  promotedId: string | null,
+): boolean {
+  return toolActivities.length > 0 && message.content.length > 0 && message.id !== promotedId && !message.streaming;
 }
 
 /** 从活动详情里提取输入和输出 */
@@ -102,6 +185,7 @@ export function ChatMessages({
   activities,
   error: _error,
   isRunning: _isRunning = false,
+  runSnapshot,
   onRetry,
   onEditMessage,
   onDecide,
@@ -118,10 +202,42 @@ export function ChatMessages({
   }, [activities]);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
+  const { byFinalMessage: turnTimelineByMessage, ownedMessageIds: timelineOwnedMessageIds } = useMemo(
+    () => buildTurnProcessTimeline(messages, activities),
+    [messages, activities],
+  );
 
   // 用户消息原地编辑状态
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
+  const [editingAttachments, setEditingAttachments] = useState<ChatAttachment[]>([]);
+
+  const fileChanges = useMemo<FileChangeSummary[]>(() => {
+    const grouped = new Map<string, FileChangeSummary>();
+    for (const activity of activities) {
+      if (activity.kind !== "file") continue;
+      const detail = activity.detail as { path?: string; operation?: string; diff?: { additions?: number; deletions?: number; patch?: string; truncated?: boolean } } | undefined;
+      if (!detail?.path || !detail.diff || typeof detail.diff.additions !== "number") continue;
+      const revision = {
+        additions: detail.diff.additions,
+        deletions: detail.diff.deletions ?? 0,
+        patch: detail.diff.patch ?? "",
+        truncated: Boolean(detail.diff.truncated),
+      };
+      const operation = detail.operation === "edit" || detail.operation === "delete" ? detail.operation : "write";
+      const existing = grouped.get(detail.path);
+      if (existing) {
+        existing.additions += revision.additions;
+        existing.deletions += revision.deletions;
+        existing.revisions.push(revision);
+        existing.operation = operation;
+      } else {
+        grouped.set(detail.path, { path: detail.path, operation, additions: revision.additions, deletions: revision.deletions, revisions: [revision] });
+      }
+    }
+    return [...grouped.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [activities]);
 
   const handleCopy = (id: string, text: string) => {
     void navigator.clipboard.writeText(text);
@@ -129,22 +245,24 @@ export function ChatMessages({
     setTimeout(() => setCopiedId(null), 1500);
   };
 
-  const startEditMessage = (id: string, currentContent: string) => {
+  const startEditMessage = (id: string, currentContent: string, attachments: ChatAttachment[] = []) => {
     setEditingMessageId(id);
     setEditingContent(currentContent);
+    setEditingAttachments(attachments);
   };
 
   const handleSaveEdit = (messageId: string) => {
     const trimmed = editingContent.trim();
     if (trimmed && onEditMessage) {
-      onEditMessage(messageId, trimmed);
+      const message = messages.find((item) => item.id === messageId);
+      onEditMessage(messageId, trimmed, editingAttachments.length ? editingAttachments : message?.attachments);
     }
     setEditingMessageId(null);
   };
 
   return (
     <Conversation className="min-h-0 flex-1 bg-black">
-      <ConversationContent className="mx-auto w-full max-w-3xl px-4 py-8">
+      <ConversationContent className="mx-auto w-full max-w-6xl px-4 py-8">
         {messages.length === 0 ? (
           /* 空状态引导区 */
           <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center">
@@ -223,6 +341,7 @@ export function ChatMessages({
                     {isEditing ? (
                       /* 内联编辑模式：与提示词输入框风格统一，重新发送按钮完全一致 */
                       <div className="w-full max-w-[85%] rounded-2xl border border-zinc-700/80 bg-zinc-900 p-3.5 shadow-xl">
+                        <ChatAttachmentGallery files={editingAttachments} onPreview={setPreviewAttachment} />
                         <textarea
                           value={editingContent}
                           onChange={(e) => setEditingContent(e.target.value)}
@@ -267,6 +386,7 @@ export function ChatMessages({
                             {message.content}
                           </p>
                         </div>
+                        <ChatAttachmentGallery files={message.attachments ?? []} onPreview={setPreviewAttachment} />
 
                         {/* 气泡右下方元数据操作栏：时间戳、复制、编辑（完全对齐用户上传截图） */}
                         <div className="flex items-center gap-1.5 pt-0.5 text-zinc-400">
@@ -304,7 +424,7 @@ export function ChatMessages({
                                 <TooltipTrigger asChild>
                                   <button
                                     type="button"
-                                    onClick={() => startEditMessage(message.id, message.content)}
+                                  onClick={() => startEditMessage(message.id, message.content, message.attachments)}
                                     className="flex size-6 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 transition-colors cursor-pointer"
                                   >
                                     <PencilIcon className="size-3.5" />
@@ -369,20 +489,23 @@ export function ChatMessages({
                 return isLast && (!currentRunId || !activity.runId);
               });
 
-              const reasoningText = (message.reasoning ?? "").trim();
-              const hasReasoning = reasoningText.length > 0;
+              const processItems = turnTimelineByMessage.get(message.id) ?? [];
+              const messageIsInTimeline = timelineOwnedMessageIds.has(message.id);
+              if (messageIsInTimeline && processItems.length === 0) return null;
+              const reasoningText = message.reasoning ?? "";
+              const hasReasoning = reasoningText.length > 0 && !messageIsInTimeline;
               // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
               const isReasoningStreaming = message.reasoningStreaming === true;
               const hasRunningTool = currentToolActivities.some((a) => a.status === "running");
 
               // 严格时序铁律：思考必须完全结束（!isReasoningStreaming）且无正在运行工具，才允许流式输出正式内容
               const shouldShowMessageContent =
-                !isReasoningStreaming && !hasRunningTool && (message.content.length > 0 || message.streaming);
+                !messageIsInTimeline && !isReasoningStreaming && !hasRunningTool && (message.content.length > 0 || message.streaming);
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
                   {/* 1. 思考组件（Reasoning）：生命周期自发送时刻起全程唯一且稳定，秒表与打字内容毫秒级同步 */}
-                  {(hasReasoning || isReasoningStreaming) ? (
+                  {(hasReasoning || (isReasoningStreaming && !messageIsInTimeline)) ? (
                     <Reasoning
                       className="mb-1 w-full"
                       isStreaming={isReasoningStreaming}
@@ -406,66 +529,13 @@ export function ChatMessages({
                   ) : null}
 
                   {/* 3. 工具调用提示：完全去掉复杂卡片，按工具名归一化展示干净的单行提示 */}
-                  {currentToolActivities.length > 0 && (
-                    <div className="flex w-full flex-col gap-1.5 my-1">
-                      {currentToolActivities.map((activity) => {
-                        const { input } = toolIo(activity);
-                        const isRunningTool = activity.status === "running";
-                        const isFailedTool = activity.status === "failed";
-
-                        // 工具名友好展示
-                        const toolLabel = (() => {
-                          switch (activity.title) {
-                            case "execute": return "执行 Shell 命令";
-                            case "ls": return "列出目录文件";
-                            case "read_file": return "读取文件";
-                            case "write_file": return "写入文件";
-                            case "edit_file": return "修改文件";
-                            case "write_todos": return "规划待办任务";
-                            case "task": return "派发子任务";
-                            case "glob": return "搜索文件路径";
-                            case "grep": return "搜索文件内容";
-                            case "delete_file": return "删除文件";
-                            default: return activity.title;
-                          }
-                        })();
-
-                        // 取输入摘要：路径/命令/内容截断
-                        const inputSummary = (() => {
-                          if (!input || typeof input !== "object") return "";
-                          const rec = input as Record<string, unknown>;
-                          const v = rec.path ?? rec.command ?? rec.pattern ?? rec.query ?? rec.content ?? "";
-                          const s = String(v ?? "").trim().replace(/\s+/g, " ");
-                          return s.length > 70 ? s.slice(0, 70) + "…" : s;
-                        })();
-
-                        return (
-                          <div
-                            key={activity.title}
-                            className="flex items-center gap-2 text-xs py-0.5 text-zinc-400"
-                          >
-                            <TerminalIcon className="size-3.5 shrink-0 text-zinc-500" />
-                            <span className="text-zinc-300">
-                              {isRunningTool ? "正在调用工具：" : "已调用工具："}
-                              <span className="text-zinc-200 font-medium">{toolLabel}</span>
-                            </span>
-                            {inputSummary && (
-                              <span className="text-zinc-500 truncate max-w-[360px]" title={inputSummary}>
-                                › {inputSummary}
-                              </span>
-                            )}
-                            {isRunningTool ? (
-                              <span className="text-[11px] text-zinc-500 animate-pulse ml-auto">调用中...</span>
-                            ) : isFailedTool ? (
-                              <span className="text-[11px] text-red-400 ml-auto">失败</span>
-                            ) : (
-                              <span className="text-[11px] text-emerald-500/80 ml-auto">完成</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <ProcessActivityGroup
+                    key={`${message.id}-${message.content.trim() ? "answer" : "process"}`}
+                    items={processItems}
+                    finalAnswerStarted={message.content.trim().length > 0}
+                    durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
+                    runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
+                  />
 
                   {/* 4. 人工安全审批卡片 */}
                   {isLast &&
@@ -531,8 +601,10 @@ export function ChatMessages({
             })}
           </div>
         )}
+        {fileChanges.length > 0 && <DiffCard changes={fileChanges} />}
       </ConversationContent>
       <ConversationScrollButton />
+      <ImagePreviewDialog file={previewAttachment} onOpenChange={(open) => { if (!open) setPreviewAttachment(null); }} />
     </Conversation>
   );
 }
