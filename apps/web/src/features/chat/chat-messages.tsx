@@ -262,7 +262,7 @@ export function ChatMessages({
 
   return (
     <Conversation className="min-h-0 flex-1 bg-black">
-      <ConversationContent className="mx-auto w-full max-w-6xl px-4 py-8">
+      <ConversationContent className="mx-auto w-full max-w-3xl px-0 py-8">
         {messages.length === 0 ? (
           /* 空状态引导区 */
           <div className="flex h-full min-h-[360px] flex-col items-center justify-center text-center">
