@@ -31,6 +31,7 @@ export type ProcessTimelineItem =
 interface ProcessActivityGroupProps {
   items: ProcessTimelineItem[];
   finalAnswerStarted: boolean;
+  finalAnswerComplete?: boolean;
   runCompleted?: boolean;
   durationMs?: number;
 }
@@ -149,6 +150,7 @@ function activityLabel(activity: Activity): string {
 export function ProcessActivityGroup({
   items,
   finalAnswerStarted,
+  finalAnswerComplete = false,
   runCompleted = true,
   durationMs,
 }: ProcessActivityGroupProps) {
@@ -161,13 +163,13 @@ export function ProcessActivityGroup({
   ).length;
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
-  const isComplete = runCompleted && activeCount === 0 && !hasStreamingMessage;
+  const isComplete = finalAnswerComplete || (runCompleted && activeCount === 0 && !hasStreamingMessage);
   const startedAt = items.length > 0
     ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
     : now;
   const endedAt = Math.max(startedAt, ...activities.map((activity) => activity.endedAt ?? activity.startedAt));
   const elapsedMs = isComplete
-    ? durationMs ?? endedAt - startedAt
+    ? durationMs ?? (finalAnswerComplete ? now - startedAt : endedAt - startedAt)
     : Math.max(durationMs ?? 0, now - startedAt);
   const statusLabel = isComplete ? "已完成分析" : "正在分析";
 
@@ -187,9 +189,8 @@ export function ProcessActivityGroup({
         className="flex w-full items-center gap-2 border-b border-[var(--color-border-subtle)] py-2.5 text-left text-[15px] text-[var(--color-text-secondary)] transition-colors"
       >
         {!isComplete ? (
-          <span className="flex items-center gap-1.5 text-[13px]">
-            <Shimmer as="span" duration={2} spread={3} className="font-medium">{statusLabel}</Shimmer>
-            <span className="tabular-nums text-[var(--color-text-muted)]">，用时 {formatElapsedDuration(elapsedMs)}</span>
+          <span className="text-[13px]">
+            <Shimmer as="span" duration={2} spread={3} className="font-medium">{`${statusLabel}，用时 ${formatElapsedDuration(elapsedMs)}`}</Shimmer>
           </span>
         ) : (
           <span className="text-[13px] font-medium">{statusLabel}，用时 {formatElapsedDuration(elapsedMs)}</span>

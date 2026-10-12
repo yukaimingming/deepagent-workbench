@@ -29,11 +29,6 @@ import {
   MessageActions as MessageActionsGroup,
   MessageAction,
 } from "../../components/ai-elements/message.js";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "../../components/ai-elements/reasoning.js";
 import { ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
 import { DiffCard, type FileChangeSummary } from "./diff-card.js";
 import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
@@ -499,11 +494,6 @@ export function ChatMessages({
               const processItems = turnTimelineByMessage.get(message.id) ?? [];
               const messageIsInTimeline = timelineOwnedMessageIds.has(message.id);
               if (messageIsInTimeline && processItems.length === 0) return null;
-              const reasoningText = message.reasoning ?? "";
-              const reasoningIsInTimeline = processItems.some(
-                (item) => item.kind === "assistant" && item.section === "reasoning" && item.id === `reasoning:${message.id}`,
-              );
-              const hasReasoning = reasoningText.length > 0 && !messageIsInTimeline && !reasoningIsInTimeline;
               // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
               const isReasoningStreaming = message.reasoningStreaming === true;
               const hasRunningTool = currentToolActivities.some((a) =>
@@ -516,24 +506,7 @@ export function ChatMessages({
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
-                  {/* 1. 思考组件（Reasoning）：生命周期自发送时刻起全程唯一且稳定，秒表与打字内容毫秒级同步 */}
-                  {(hasReasoning || (isReasoningStreaming && !messageIsInTimeline && !reasoningIsInTimeline)) ? (
-                    <Reasoning
-                      className="mb-1 w-full"
-                      isStreaming={isReasoningStreaming}
-                      defaultOpen={isReasoningStreaming}
-                      duration={message.reasoningDuration}
-                      startedAt={message.reasoningStartedAt}
-                    >
-                      <ReasoningTrigger className="text-zinc-400 hover:text-zinc-200 py-1 flex items-center gap-2 text-xs" />
-
-                      <ReasoningContent className="text-zinc-400 text-[13px] leading-relaxed pl-3 border-l-2 border-zinc-800 my-2">
-                        {reasoningText}
-                      </ReasoningContent>
-                    </Reasoning>
-                  ) : null}
-
-                  {/* 2. 待办任务队列卡片（Queue / Todo）：仅在当前轮次调用了 write_todos 时展示 */}
+                  {/* 1. 待办任务队列卡片（Queue / Todo）：仅在当前轮次调用了 write_todos 时展示 */}
                   {currentTodoActivity ? (
                     <div className="w-full my-1">
                       <TodoCard activity={currentTodoActivity} />
@@ -545,6 +518,7 @@ export function ChatMessages({
                     key={`${message.id}-${shouldShowMessageContent && message.content.trim() ? "answer" : "process"}`}
                     items={processItems}
                     finalAnswerStarted={shouldShowMessageContent && message.content.trim().length > 0}
+                    finalAnswerComplete={shouldShowMessageContent && !message.streaming && message.content.trim().length > 0}
                     durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
                     runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
                   />
