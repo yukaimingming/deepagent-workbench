@@ -20,6 +20,7 @@ export type ProcessTimelineItem =
       content: string;
       startedAt: number;
       streaming?: boolean;
+      section?: "reasoning";
     }
   | {
       id: string;
@@ -103,6 +104,29 @@ function toolInputSummary(activity: Activity): string {
   return summary.length > 160 ? `${summary.slice(0, 157)}…` : summary;
 }
 
+function stringifyDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function detailSections(activity: Activity): Array<{ label: string; value: string }> {
+  const detail = activity.detail as { input?: unknown; output?: unknown; args?: unknown } | undefined;
+  const input = detail?.input ?? detail?.args;
+  const sections: Array<{ label: string; value: string }> = [];
+  if (input !== undefined) sections.push({ label: "输入参数", value: stringifyDetail(input) });
+  if (detail?.output !== undefined) sections.push({ label: "执行结果", value: stringifyDetail(detail.output) });
+  if (activity.error) sections.push({ label: "错误信息", value: activity.error });
+  return sections;
+}
+
+function reasoningPreview(content: string): string {
+  return content.trim().split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+}
+
 function actionIcon(name: string) {
   if (name === "execute") return TerminalIcon;
   if (name === "write_todos") return PencilLineIcon;
@@ -166,6 +190,21 @@ export function ProcessActivityGroup({
           {items.map((item, index) => {
             const staggerStyle = { animationDelay: `${Math.min(index, 8) * 45}ms` };
             if (item.kind === "assistant") {
+              if (item.section === "reasoning") {
+                return (
+                  <details key={item.id} className="process-activity-enter group" style={staggerStyle}>
+                    <summary className="flex cursor-pointer list-none items-center gap-2.5 text-[15px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
+                      <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
+                      <BrainCircuitIcon className="size-[18px] shrink-0 text-[var(--color-text-muted)]" />
+                      <span>{item.streaming ? "正在思考" : "思考"}</span>
+                      <span className="min-w-0 truncate text-[13px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>
+                    </summary>
+                    <div className="ml-[30px] mt-2 border-l border-[var(--color-border-subtle)] pl-4 text-[14px] leading-[1.7] text-[var(--color-text-secondary)]">
+                      <MessageResponse mode={item.streaming ? "streaming" : "static"}>{item.content}</MessageResponse>
+                    </div>
+                  </details>
+                );
+              }
               return (
                 <article key={item.id} className="process-activity-enter" style={staggerStyle}>
                   <div className="flex items-center gap-2.5 text-[15px] text-[var(--color-text-secondary)]">
@@ -213,6 +252,8 @@ export function ProcessActivityGroup({
             const name = toolName(activity);
             const Icon = actionIcon(name);
             const summaryText = toolInputSummary(activity);
+            const sections = detailSections(activity);
+            const detail = activity.detail as { truncated?: unknown } | undefined;
             const tone = activity.status === "failed"
               ? "text-[var(--color-state-error)]"
               : activity.status === "waiting_approval"
@@ -222,11 +263,23 @@ export function ProcessActivityGroup({
               <div key={item.id} className={`process-activity-enter flex min-w-0 items-start gap-2.5 text-[15px] ${tone}`} style={staggerStyle}>
                 <Icon className="mt-0.5 size-[18px] shrink-0 text-[var(--color-text-muted)]" />
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <span>{activityLabel(activity)}</span>
-                    {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
-                  </div>
-                  {activity.error && <p className="mt-1 text-[13px] text-[var(--color-state-error)]">{activity.error}</p>}
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
+                      <ChevronDownIcon className="size-3.5 shrink-0 self-center transition-transform group-open:rotate-180" />
+                      <span>{activityLabel(activity)}</span>
+                      {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
+                    </summary>
+                    <div className="mt-2 space-y-3 pl-5">
+                      {sections.map((section) => (
+                        <section key={section.label}>
+                          <h4 className="mb-1 text-[12px] font-medium text-[var(--color-text-muted)]">{section.label}</h4>
+                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-3 font-mono text-[12px] leading-relaxed text-[var(--color-text-primary)]">{section.value}</pre>
+                        </section>
+                      ))}
+                      {detail?.truncated === true && <p className="text-[12px] text-[var(--color-text-muted)]">服务端返回的结果已截断</p>}
+                      {sections.length === 0 && <p className="text-[13px] text-[var(--color-text-muted)]">此工具调用没有提供可展示的参数或结果。</p>}
+                    </div>
+                  </details>
                 </div>
               </div>
             );

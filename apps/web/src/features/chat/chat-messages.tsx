@@ -108,6 +108,7 @@ export function buildTurnProcessTimeline(
           label: item.reasoningStreaming ? "正在思考" : "已完成分析",
           content: item.reasoning, startedAt: item.reasoningStartedAt ?? createdAt,
           streaming: item.reasoningStreaming,
+          section: "reasoning",
         });
         ownedMessageIds.add(item.id);
       }
