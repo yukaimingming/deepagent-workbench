@@ -134,7 +134,7 @@ export function WorkspaceSidebar({
       if (!trimmed) return;
       try {
         // 通知后端切换当前工作区
-        await fetch("http://127.0.0.1:8787/api/workspace/select", {
+        await fetch("/api/workspace/select", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: trimmed }),

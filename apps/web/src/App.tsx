@@ -94,7 +94,7 @@ export function App() {
   /** 当前工作区目录。若为 null 则表示单纯不在工作区的直接聊天模式。 */
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(() => {
     try {
-      const saved = localStorage.getItem("deepagent_current_workspace_v3");
+      const saved = localStorage.getItem("deepagent_langchain_workspace_v1");
       if (saved !== null) {
         return saved === "DIRECT_CHAT" ? null : saved;
       }
@@ -108,9 +108,9 @@ export function App() {
   useEffect(() => {
     try {
       if (workspaceRoot === null || workspaceRoot.trim() === "") {
-        localStorage.setItem("deepagent_current_workspace_v3", "DIRECT_CHAT");
+        localStorage.setItem("deepagent_langchain_workspace_v1", "DIRECT_CHAT");
       } else {
-        localStorage.setItem("deepagent_current_workspace_v3", workspaceRoot);
+        localStorage.setItem("deepagent_langchain_workspace_v1", workspaceRoot);
       }
     } catch {
       // 忽略
@@ -343,7 +343,7 @@ export function App() {
       const trimmed = pickedPath.trim();
       if (!trimmed) return;
       try {
-        await fetch("http://127.0.0.1:8787/api/workspace/select", {
+        await fetch("/api/workspace/select", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: trimmed }),

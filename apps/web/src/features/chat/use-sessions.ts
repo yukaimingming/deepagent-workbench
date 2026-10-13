@@ -11,9 +11,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientState } from "./client-reducer.js";
 
-const SESSIONS_STORAGE_KEY = "deepagent_sessions_list_v2";
-const WORKSPACES_STORAGE_KEY = "deepagent_workspaces_list_v2";
-const SESSION_STATE_PREFIX = "deepagent_session_state_";
+const SESSIONS_STORAGE_KEY = "deepagent_langchain_sessions_v1";
+const WORKSPACES_STORAGE_KEY = "deepagent_langchain_workspaces_v1";
+const SESSION_STATE_PREFIX = "deepagent_langchain_session_state_v1_";
 
 export interface SessionSummary {
   id: string;
