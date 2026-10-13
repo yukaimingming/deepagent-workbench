@@ -1,4 +1,4 @@
-import { useEffect, useState, type SyntheticEvent } from "react";
+import { useEffect, useState } from "react";
 import { MessageResponse } from "../../components/ai-elements/message.js";
 import {
   BrainCircuitIcon,
@@ -142,17 +142,6 @@ function isLiveActivity(activity: Activity): boolean {
   return activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval";
 }
 
-/** 执行中强制展开，结束后保持当前开合，方便继续查看刚流式出现的内容。 */
-function useLiveDetailsOpen(live: boolean): [boolean, (event: SyntheticEvent<HTMLDetailsElement>) => void] {
-  const [open, setOpen] = useState(live);
-  const [trackedLive, setTrackedLive] = useState(live);
-  if (live !== trackedLive) {
-    setTrackedLive(live);
-    if (live) setOpen(true);
-  }
-  return [open, (event) => setOpen(event.currentTarget.open)];
-}
-
 function ActionGlyph({ name, className }: { name: string; className?: string }) {
   if (name === "execute") return <TerminalIcon className={className} />;
   if (name === "write_todos") return <PencilLineIcon className={className} />;
@@ -171,9 +160,9 @@ function StreamingText({ content, streaming }: { content: string; streaming?: bo
 }
 
 function ReasoningActivity({ item }: { item: Extract<ProcessTimelineItem, { kind: "assistant" }> }) {
-  const [open, onToggle] = useLiveDetailsOpen(Boolean(item.streaming));
+  const [open, setOpen] = useState(false);
   return (
-    <details className="process-activity-enter group" open={open} onToggle={onToggle}>
+    <details className="process-activity-enter group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-[13px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
         <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
         {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="shrink-0 font-medium">思考</Shimmer> : <span className="shrink-0">思考</span>}
@@ -197,7 +186,7 @@ function ToolActivityRow({
   style: { animationDelay: string };
 }) {
   const live = isLiveActivity(activity);
-  const [open, onToggle] = useLiveDetailsOpen(live);
+  const [open, setOpen] = useState(false);
   const name = toolName(activity);
   const summaryText = toolInputSummary(activity);
   const sections = detailSections(activity);
@@ -211,7 +200,7 @@ function ToolActivityRow({
     <div key={itemId} className={`process-activity-enter flex min-w-0 items-start gap-2 text-[13px] ${tone}`} style={style}>
       <ActionGlyph name={name} className="mt-0.5 size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
       <div className="min-w-0 flex-1">
-        <details className="group" open={open} onToggle={onToggle}>
+        <details className="group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
           <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
             {live ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{activityLabel(activity)}</Shimmer> : <span>{activityLabel(activity)}</span>}
             {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
@@ -249,29 +238,37 @@ export function ProcessActivityGroup({
   startedAt: runStartedAt,
   finalAnswerComplete = false,
   finalAnswerStreaming = false,
-  runCompleted = true,
+  runCompleted = false,
   durationMs,
 }: ProcessActivityGroupProps) {
-  const [manualExpanded, setManualExpanded] = useState<boolean | undefined>(undefined);
-  const expanded = manualExpanded ?? true;
-  const [now, setNow] = useState(() => Date.now());
-
   const activities = items.flatMap((item) => item.kind === "activity" ? [item.activity] : []);
   const activeCount = activities.filter((activity) =>
     activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval",
   ).length;
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
-  const isComplete = finalAnswerComplete || finalAnswerStreaming || (
-    runCompleted && activeCount === 0 && !hasStreamingMessage
-  );
+  // 只要本轮仍在执行且最终总结尚未开始输出，即使在思考与工具衔接的短暂间隙也保持「正在分析」，避免状态与折叠来回跳变。
+  const analysisBusy =
+    activeCount > 0 ||
+    hasStreamingMessage ||
+    (isActive && !finalAnswerStreaming && !finalAnswerComplete && !runCompleted);
+  const settled = !analysisBusy && items.length > 0;
+  // 最上方时间线默认始终保持展开，不再自动收缩，仅由用户手动点击标题栏切换。
+  const [manualExpanded, setManualExpanded] = useState<boolean | undefined>(undefined);
+  const expanded = manualExpanded ?? true;
+  const [now, setNow] = useState(() => Date.now());
   const startedAt = items.length > 0
     ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
     : runStartedAt ?? now;
-  const endedAt = Math.max(startedAt, ...activities.map((activity) => activity.endedAt ?? activity.startedAt));
-  const elapsedMs = isComplete
-    ? durationMs ?? (finalAnswerComplete || finalAnswerStreaming ? now - startedAt : endedAt - startedAt)
-    : Math.max(durationMs ?? 0, now - startedAt);
+  const liveElapsed = Math.max(durationMs ?? 0, now - startedAt);
+  const [frozenElapsed, setFrozenElapsed] = useState<number | undefined>(undefined);
+  if (settled && frozenElapsed === undefined) {
+    setFrozenElapsed(liveElapsed);
+  } else if (!settled && frozenElapsed !== undefined) {
+    setFrozenElapsed(undefined);
+  }
+  const elapsedMs = settled ? (frozenElapsed ?? liveElapsed) : liveElapsed;
+  const isComplete = settled || finalAnswerComplete || runCompleted;
   const statusLabel = isComplete ? "已完成分析" : "正在分析";
 
   useEffect(() => {
@@ -322,9 +319,9 @@ export function ProcessActivityGroup({
                     )}
                     {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{item.label.replace(/^已完成/, "正在")}</Shimmer> : <span>{item.label}</span>}
                   </div>
-                  <div className="mt-1.5 break-words text-[15px] leading-relaxed text-[var(--color-text-primary)]">
-                    <StreamingText content={item.content} streaming={item.streaming} />
-                  </div>
+                  <p className={`mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--color-text-secondary)]${item.streaming ? " streaming-caret" : ""}`}>
+                    {item.content}
+                  </p>
                 </article>
               );
             }

@@ -100,6 +100,11 @@ export class DeepAgentToAguiAdapter {
   private lastResumeText = "";
   /** 当前是否为审批续跑运行。 */
   private isResumeRun = false;
+  /** 当前正在流式输出的推理与正文消息 ID（用于在结束/中断/报错前兜底闭合）。 */
+  private openReasoningId: string | null = null;
+  private openTextId: string | null = null;
+  /** 当前模型消息流处理屏障：确保思考与过程说明流式输出完毕后再推送工具开始卡片。 */
+  private activeMessageBarrier: Promise<void> | null = null;
   /** 累计的 Token 用量（来自各轮模型消息的 usage_metadata）。 */
   private usage: RunTokenUsage = {
     inputTokens: 0,
@@ -124,15 +129,18 @@ export class DeepAgentToAguiAdapter {
 
     // 预收集本轮执行前，历史消息中已经存在的所有 tool_call ID，
     // 彻底杜绝把历史轮次的工具调用重放到当前轮次！
-    if (Array.isArray(ctx.input.messages)) {
-      for (const m of ctx.input.messages) {
-        const calls = (m as unknown as { tool_calls?: unknown[] }).tool_calls;
-        if (Array.isArray(calls)) {
-          for (const c of calls) {
-            const cid = (c as { id?: string })?.id;
-            if (cid) this.seenToolCalls.add(String(cid));
-          }
-        }
+    this.markHistoricalMessages(ctx.input.messages);
+  }
+
+  /**
+   * 将历史消息中已存在的 tool_call ID 记入已见集合，防止 checkpoint 重放旧轮次工具卡片。
+   */
+  markHistoricalMessages(messages: unknown): void {
+    if (!Array.isArray(messages)) return;
+    for (const raw of messages) {
+      if (!raw || typeof raw !== "object") continue;
+      for (const call of extractStateToolCalls(raw as Record<string, unknown>)) {
+        if (call.id) this.seenToolCalls.add(call.id);
       }
     }
   }
@@ -156,137 +164,191 @@ export class DeepAgentToAguiAdapter {
    */
   async consumeMessages(run: DeepAgentRunStream): Promise<void> {
     for await (const message of run.messages) {
-      let reasoningId: string | null = null;
-      let textId: string | null = null;
-      let reasoningOpen = false;
-      let textStarted = false;
-      let streamedText = '';
+      let releaseMessageBarrier: () => void = () => {};
+      this.activeMessageBarrier = new Promise<void>((resolve) => {
+        releaseMessageBarrier = resolve;
+      });
 
-      const endReasoning = (): void => {
-        if (!reasoningId || !reasoningOpen) return;
-        this.emit({
-          type: EventType.REASONING_MESSAGE_END,
-          messageId: reasoningId,
-          timestamp: this.ctx.now(),
-        });
-        reasoningOpen = false;
-      };
-
-      const emitReasoning = (delta: string): void => {
-        if (!delta) return;
-        if (!reasoningOpen) {
-          reasoningId = this.ctx.newId();
-          reasoningOpen = true;
-          this.emit({
-            type: EventType.REASONING_MESSAGE_START,
-            messageId: reasoningId,
-            role: 'reasoning',
-            timestamp: this.ctx.now(),
-          });
-          this.emitSnapshot({ status: 'running', progressNote: '模型推理中' });
-        }
-        this.emit({
-          type: EventType.REASONING_MESSAGE_CONTENT,
-          messageId: reasoningId,
-          delta,
-          timestamp: this.ctx.now(),
-        });
-      };
-
-      const emitText = (delta: string): void => {
-        if (!delta) return;
-        endReasoning();
-        if (!textStarted) {
-          textStarted = true;
-          textId = this.ctx.newId();
-          this.emit({
-            type: EventType.TEXT_MESSAGE_START,
-            messageId: textId,
-            role: 'assistant',
-            timestamp: this.ctx.now(),
-          });
-        }
-        streamedText += delta;
-        this.emit({
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: textId,
-          delta,
-          timestamp: this.ctx.now(),
-        });
-      };
-
-      // ChatModelStream 可重放同一条有序事件流；消费原始事件才能保留
-      // reasoning 与正文的相对顺序，避免并发读取两个投影后再缓冲重排。
-      for await (const event of message) {
-        const raw = event as unknown as {
-          event: string;
-          message?: string;
-          delta?: { type?: string; text?: string; reasoning?: string };
-          content?: { type?: string; text?: string; reasoning?: string; thinking?: string };
-        };
-        if (raw.event === 'error') throw new Error(raw.message || '模型流发生错误');
-        if (raw.event !== 'content-block-delta') continue;
-
-        if (raw.delta?.type === 'reasoning-delta' && typeof raw.delta.reasoning === 'string') {
-          emitReasoning(raw.delta.reasoning);
-        } else if (raw.delta?.type === 'text-delta' && typeof raw.delta.text === 'string') {
-          emitText(raw.delta.text);
-        } else if (!raw.delta && raw.content?.type === 'reasoning' && typeof raw.content.reasoning === 'string') {
-          emitReasoning(raw.content.reasoning);
-        } else if (!raw.delta && raw.content?.type === 'thinking' && typeof raw.content.thinking === 'string') {
-          emitReasoning(raw.content.thinking);
-        } else if (!raw.delta && raw.content?.type === 'text' && typeof raw.content.text === 'string') {
-          emitText(raw.content.text);
-        }
-      }
-      endReasoning();
-
-      let fullMessageText = '';
       try {
-        const maybePromise =
-          typeof (message as { output?: PromiseLike<unknown> }).output !== 'undefined'
-            ? (message as { output: PromiseLike<unknown> }).output
-            : message;
-        const aiMsg = (await Promise.resolve(maybePromise)) as {
-          content?: unknown;
-          usage_metadata?: {
-            input_tokens?: number;
-            output_tokens?: number;
-            total_tokens?: number;
-            input_token_details?: { cache_read?: number; cache_creation?: number };
-          } | null;
-          response_metadata?: { model_name?: string } | null;
-        } | null;
-        this.recordUsage(aiMsg);
-        if (typeof aiMsg?.content === 'string') {
-          fullMessageText = aiMsg.content;
-        } else if (Array.isArray(aiMsg?.content)) {
-          fullMessageText = (aiMsg.content as Array<{ text?: string }>)
-            .map((content) => content.text || '')
-            .join('');
-        }
-      } catch {
-        // 无法取得最终消息时保留已实时发送的原始增量，不重播正文。
-      }
+        let reasoningId: string | null = null;
+        let textId: string | null = null;
+        let reasoningOpen = false;
+        let textStarted = false;
+        let streamedText = '';
+        let sawToolCallInStream = false;
 
-      if (this.isResumeRun) this.lastResumeText = streamedText || fullMessageText;
-      if (!textStarted && fullMessageText.trim()) {
-        // 只有底层未给正文增量时才以完整消息兜底一次。
-        emitText(fullMessageText);
-        if (this.isResumeRun) this.lastResumeText = fullMessageText;
-      }
-      if (textId) {
-        this.emit({
-          type: EventType.TEXT_MESSAGE_END,
-          messageId: textId,
-          timestamp: this.ctx.now(),
-        });
+        const endReasoning = (): void => {
+          if (!reasoningId || !reasoningOpen) return;
+          this.openReasoningId = null;
+          this.emit({
+            type: EventType.REASONING_MESSAGE_END,
+            messageId: reasoningId,
+            timestamp: this.ctx.now(),
+          });
+          reasoningOpen = false;
+        };
+
+        const emitReasoning = (delta: string): void => {
+          if (!delta) return;
+          if (!reasoningOpen) {
+            reasoningId = this.ctx.newId();
+            reasoningOpen = true;
+            this.openReasoningId = reasoningId;
+            this.emit({
+              type: EventType.REASONING_MESSAGE_START,
+              messageId: reasoningId,
+              role: 'reasoning',
+              timestamp: this.ctx.now(),
+            });
+            this.emitSnapshot({ status: 'running', progressNote: '模型推理中' });
+          }
+          this.emit({
+            type: EventType.REASONING_MESSAGE_CONTENT,
+            messageId: reasoningId,
+            delta,
+            timestamp: this.ctx.now(),
+          });
+        };
+
+        const emitText = (delta: string): void => {
+          if (!delta) return;
+          endReasoning();
+          if (!textStarted) {
+            textStarted = true;
+            textId = this.ctx.newId();
+            this.openTextId = textId;
+            this.emit({
+              type: EventType.TEXT_MESSAGE_START,
+              messageId: textId,
+              role: 'assistant',
+              timestamp: this.ctx.now(),
+            });
+          }
+          streamedText += delta;
+          this.emit({
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: textId,
+            delta,
+            timestamp: this.ctx.now(),
+          });
+        };
+
+        // ChatModelStream 可重放同一条有序事件流；消费原始事件才能保留
+        // reasoning 与正文的相对顺序，避免并发读取两个投影后再缓冲重排。
+        for await (const event of message) {
+          const raw = event as unknown as {
+            event: string;
+            message?: string;
+            delta?: { type?: string; text?: string; reasoning?: string };
+            content?: { type?: string; text?: string; reasoning?: string; thinking?: string };
+          };
+          if (raw.event === 'error') throw new Error(raw.message || '模型流发生错误');
+          if (
+            raw.event === 'tool-call-delta' ||
+            raw.delta?.type === 'tool-call-delta' ||
+            raw.content?.type === 'tool_call_chunk' ||
+            raw.content?.type === 'tool_call' ||
+            raw.content?.type === 'tool-use'
+          ) {
+            sawToolCallInStream = true;
+          }
+          if (raw.event !== 'content-block-delta') continue;
+
+          if (raw.delta?.type === 'reasoning-delta' && typeof raw.delta.reasoning === 'string') {
+            emitReasoning(raw.delta.reasoning);
+          } else if (raw.delta?.type === 'text-delta' && typeof raw.delta.text === 'string') {
+            emitText(raw.delta.text);
+          } else if (!raw.delta && raw.content?.type === 'reasoning' && typeof raw.content.reasoning === 'string') {
+            emitReasoning(raw.content.reasoning);
+          } else if (!raw.delta && raw.content?.type === 'thinking' && typeof raw.content.thinking === 'string') {
+            emitReasoning(raw.content.thinking);
+          } else if (!raw.delta && raw.content?.type === 'text' && typeof raw.content.text === 'string') {
+            emitText(raw.content.text);
+          }
+        }
+        endReasoning();
+
+        let fullMessageText = '';
+        let messageToolCalls: Array<{ id: string; name: string; input: unknown }> = [];
+        try {
+          const maybePromise =
+            typeof (message as { output?: PromiseLike<unknown> }).output !== 'undefined'
+              ? (message as { output: PromiseLike<unknown> }).output
+              : message;
+          const aiMsg = (await Promise.resolve(maybePromise)) as {
+            content?: unknown;
+            tool_calls?: unknown[];
+            additional_kwargs?: { tool_calls?: unknown[] };
+            usage_metadata?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              total_tokens?: number;
+              input_token_details?: { cache_read?: number; cache_creation?: number };
+            } | null;
+            response_metadata?: { model_name?: string } | null;
+          } | null;
+          this.recordUsage(aiMsg);
+          if (aiMsg && typeof aiMsg === 'object') {
+            messageToolCalls = extractStateToolCalls(aiMsg as Record<string, unknown>);
+          }
+          if (typeof aiMsg?.content === 'string') {
+            fullMessageText = aiMsg.content;
+          } else if (Array.isArray(aiMsg?.content)) {
+            fullMessageText = (aiMsg.content as Array<{ text?: string }>)
+              .map((content) => content.text || '')
+              .join('');
+          }
+        } catch {
+          // 无法取得最终消息时保留已实时发送的原始增量，不重播正文。
+        }
+
+        if (this.isResumeRun) this.lastResumeText = streamedText || fullMessageText;
+        if (!textStarted && fullMessageText.trim()) {
+          // 只有底层未给正文增量时才以完整消息兜底一次。
+          emitText(fullMessageText);
+          if (this.isResumeRun) this.lastResumeText = fullMessageText;
+        }
+        if (textId && this.openTextId === textId) {
+          this.openTextId = null;
+          this.emit({
+            type: EventType.TEXT_MESSAGE_END,
+            messageId: textId,
+            timestamp: this.ctx.now(),
+          });
+        }
+
+        // 如果当前模型消息伴随工具调用，通知前端该文本属于中间过程说明，
+        // 并紧随其后按序启动本消息声明的工具调用卡片。
+        if (textId && (sawToolCallInStream || messageToolCalls.length > 0)) {
+          this.emit({
+            type: EventType.CUSTOM,
+            name: AGUI_CUSTOM_EVENT.PROCESS_MESSAGE,
+            value: { messageId: textId, runId: this.ctx.input.runId },
+            timestamp: this.ctx.now(),
+          });
+        }
+        for (const call of messageToolCalls) {
+          const startedAt = this.startToolActivity(call.id, call.name, call.input);
+          if (startedAt === null) continue;
+          this.pendingValueToolCalls.set(call.id, {
+            name: call.name,
+            input: call.input,
+            startedAt,
+            ...(FILE_TOOLS[call.name] ? { fileOperation: FILE_TOOLS[call.name] } : {}),
+          });
+        }
+      } finally {
+        releaseMessageBarrier?.();
+        this.activeMessageBarrier = null;
       }
     }
   }
   /** 消费工具调用流：映射为工具卡片与文件卡片。 */
   async consumeToolCalls(run: DeepAgentRunStream): Promise<void> {
     for await (const call of run.toolCalls) {
+      if (this.activeMessageBarrier) {
+        await this.activeMessageBarrier;
+      }
       const startedAt = this.startToolActivity(call.callId, call.name, call.input);
       if (startedAt === null) continue;
 
@@ -389,6 +451,9 @@ export class DeepAgentToAguiAdapter {
     let lastTodoSignature = "";
 
     for await (const values of run.values) {
+      if (this.activeMessageBarrier) {
+        await this.activeMessageBarrier;
+      }
       if (process.env.DEEPAGENT_DEBUG_VALUES === "1") {
         const keys = values && typeof values === "object" ? Object.keys(values) : [];
         const msgs = Array.isArray((values as any)?.messages) ? (values as any).messages.length : -1;
@@ -526,10 +591,32 @@ export class DeepAgentToAguiAdapter {
     });
   }
 
+  /** 兜底闭合尚未发出 END 的推理或正文消息流，防止 AG-UI 协议校验报错。 */
+  private closeOpenStreams(): void {
+    if (this.openReasoningId) {
+      const id = this.openReasoningId;
+      this.openReasoningId = null;
+      this.emit({
+        type: EventType.REASONING_MESSAGE_END,
+        messageId: id,
+        timestamp: this.ctx.now(),
+      });
+    }
+    if (this.openTextId) {
+      const id = this.openTextId;
+      this.openTextId = null;
+      this.emit({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: id,
+        timestamp: this.ctx.now(),
+      });
+    }
+  }
+
   /** 发出错误事件并结束。 */
   fail(error: unknown): void {
     if (this.finished) return;
-    this.finished = true;
+    this.closeOpenStreams();
     const message = error instanceof Error ? error.message : String(error);
     this.upsertActivity({
       id: `error:${this.ctx.newId()}`,
@@ -548,6 +635,7 @@ export class DeepAgentToAguiAdapter {
       message,
       timestamp: this.ctx.now(),
     });
+    this.finished = true;
   }
 
   /** 汇总一条模型消息的 Token 用量（缓存命中单独累计）。 */
@@ -641,6 +729,7 @@ export class DeepAgentToAguiAdapter {
   /** 发出成功结束事件。 */
   finish(): void {
     if (this.finished) return;
+    this.closeOpenStreams();
     const todoActivity = this.activities.get("todo:main");
     if (todoActivity?.kind === "todo" && todoActivity.status === "running") {
       const detail = todoActivity.detail as TodoDetail;
@@ -661,7 +750,6 @@ export class DeepAgentToAguiAdapter {
     // 之后的事件不会被消费。
     // 不设 progressNote：状态徽章已显示「已完成」，再写一遍会重复。
     this.emitSnapshot({ status: "completed", usage: this.usage });
-    this.finished = true;
     this.emit({
       type: EventType.RUN_FINISHED,
       threadId: this.ctx.input.threadId,
@@ -669,12 +757,13 @@ export class DeepAgentToAguiAdapter {
       outcome: { type: "success" },
       timestamp: this.ctx.now(),
     });
+    this.finished = true;
   }
 
   /** 发出中断结束事件（等待审批）。 */
   finishWithInterrupt(): void {
     if (this.finished) return;
-    this.finished = true;
+    this.closeOpenStreams();
     this.emit({
       type: EventType.RUN_FINISHED,
       threadId: this.ctx.input.threadId,
@@ -690,6 +779,7 @@ export class DeepAgentToAguiAdapter {
       },
       timestamp: this.ctx.now(),
     });
+    this.finished = true;
   }
 
   /** 把用户决策转成 LangGraph 的 Command（用于恢复被中断的运行）。 */
@@ -825,6 +915,8 @@ export class DeepAgentToAguiAdapter {
   }
 
   private emit(event: BaseEvent): void {
+    // 结束后的投影迭代器还可能再吐事件。丢掉它们，避免跑到 RUN_FINISHED 后面。
+    if (this.finished) return;
     // RUN_STARTED / RUN_FINISHED 按标准事件字段携带 runId 和 threadId；
     // 其他事件把运行信息放进 CUSTOM.value，避免在标准事件上附加未知字段。
     this.sink(event);

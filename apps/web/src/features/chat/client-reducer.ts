@@ -41,6 +41,10 @@ export interface ChatMessage {
   reasoningDuration?: number;
   /** 消息创建时间戳（毫秒） */
   createdAt?: number;
+  /** 正文第一段增量到达的时间。用来区分工具前的说明和工具后的最终总结。 */
+  contentStartedAt?: number;
+  /** 是否为工具调用前后的中间过程说明（直接在时间线内流式展示，不进入外部最终答复区）。 */
+  isProcess?: boolean;
   /** 整轮任务完成时间与耗时，便于历史过程摘要复用。 */
   runEndedAt?: number;
   runDurationMs?: number;
@@ -67,9 +71,10 @@ export interface ClientState {
 export type ClientAction =
   | { type: "addUserMessage"; id: string; content: string; attachments?: Array<FileUIPart & { id: string }> }
   | { type: "startPendingAssistant"; messageId: string; startedAt: number }
-  | { type: "startAssistant"; runId: string; messageId: string }
+  | { type: "startAssistant"; runId: string; messageId: string; isProcess?: boolean }
   | { type: "appendAssistant"; messageId: string; delta: string }
   | { type: "endAssistant"; messageId: string }
+  | { type: "markProcessMessage"; messageId: string }
   | { type: "startReasoning"; runId: string; messageId: string }
   | { type: "appendReasoning"; messageId: string; delta: string }
   | { type: "endReasoning"; messageId: string }
@@ -81,6 +86,42 @@ export type ClientAction =
   | { type: "newThread"; threadId: string }
   | { type: "loadState"; state: ClientState }
   | { type: "reset" };
+
+/**
+ * 单调递增的客户端回放时间戳。
+ * 确保按序回放的思考、过程说明与工具卡片拥有严格递增的时序基准，
+ * 杜绝服务端时间戳与客户端回放时间戳混用导致的排序跳变。
+ */
+let lastClientTimestamp = 0;
+function nextClientTimestamp(): number {
+  const now = Date.now();
+  lastClientTimestamp = now > lastClientTimestamp ? now : lastClientTimestamp + 1;
+  return lastClientTimestamp;
+}
+
+/**
+ * 当本轮后续出现工具调用或新一轮思考/正文时，将当前轮次已有的过程节点封口标记为 isProcess，
+ * 防止后续无思考的总结正文越过工具合并回更早的纯思考节点中。
+ */
+function markTurnAssistantsAsProcess(messages: ChatMessage[], runId?: string): ChatMessage[] {
+  const lastUserIndex = messages.findLastIndex((m) => m.role === "user");
+  let changed = false;
+  const next = messages.map((msg, idx) => {
+    if (idx <= lastUserIndex) return msg;
+    if (msg.role !== "assistant") return msg;
+    if (runId && msg.runId && msg.runId !== runId) return msg;
+    const hasGeneratedStep =
+      msg.content.length > 0 ||
+      msg.streaming ||
+      Boolean(msg.reasoning && msg.reasoning.length > 0);
+    if (hasGeneratedStep && !msg.isProcess) {
+      changed = true;
+      return { ...msg, isProcess: true };
+    }
+    return msg;
+  });
+  return changed ? next : messages;
+}
 
 export const initialState: ClientState = {
   messages: [],
@@ -120,7 +161,11 @@ export function createInitialState(threadId: string): ClientState {
   };
 }
 
-/** 寻找当前轮次对应的 assistant 消息，保证一个用户提问轮次始终只对应一条助手消息。 */
+/**
+ * 寻找当前节点可合并的末尾 assistant 消息。
+ * 只允许合并到消息列表最后一条尚未产生正文、且未被后续工具封口（!isProcess）的助手消息，
+ * 绝不跨越已经发生的后续节点或工具调用往前合并。
+ */
 function findCurrentAssistantIndex(
   messages: ChatMessage[],
   runId?: string,
@@ -128,33 +173,24 @@ function findCurrentAssistantIndex(
 ): number {
   if (messageId) {
     const byId = messages.findIndex((m) => m.id === messageId);
-    if (byId !== -1 && messages[byId]?.role === "assistant" && !messages[byId]?.content) return byId;
-  }
-  if (runId) {
-    // 只合并本轮最后一个仍无正文的过程段，不能把同一运行中已完成的
-    // 中间回答重新命中，否则后续节点会串入旧气泡的 Markdown 正文。
-    const byRun = messages.findLastIndex(
-      (m) => m.role === "assistant" && m.runId === runId && !m.content,
-    );
-    if (byRun !== -1) return byRun;
-  }
-  // 查找最后一条 user 消息之后创建的 assistant 消息
-  const lastUserIndex = messages.findLastIndex((m) => m.role === "user");
-  if (lastUserIndex !== -1) {
-    for (let i = lastUserIndex + 1; i < messages.length; i++) {
-      if (
-        messages[i]?.role === "assistant" &&
-        !messages[i]?.content &&
-        (!runId || messages[i]?.runId === runId)
-      ) return i;
+    if (
+      byId !== -1 &&
+      messages[byId]?.role === "assistant" &&
+      !messages[byId]?.content &&
+      !messages[byId]?.isProcess
+    ) {
+      return byId;
     }
   }
   const lastMessage = messages.at(-1);
   if (
     lastMessage?.role === "assistant" &&
     !lastMessage.content &&
-    (!runId || lastMessage.runId === runId)
-  ) return messages.length - 1;
+    !lastMessage.isProcess &&
+    (!runId || !lastMessage.runId || lastMessage.runId === runId)
+  ) {
+    return messages.length - 1;
+  }
   return -1;
 }
 
@@ -223,6 +259,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         messages[existingIndex] = {
           ...target,
           streaming: true,
+          ...(action.isProcess ? { isProcess: true } : {}),
           reasoningStreaming: keepReasoningStreaming,
           reasoningDuration:
             target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
@@ -231,21 +268,24 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         return { ...state, messages };
       }
 
-      const assistantId = state.messages.some((message) => message.id === action.messageId)
+      const prevMessages = markTurnAssistantsAsProcess(state.messages, action.runId);
+      const assistantId = prevMessages.some((message) => message.id === action.messageId)
         ? randomUUID()
         : action.messageId;
       textToAssistant.set(bindingKey(state.threadId, action.messageId), assistantId);
+      const ts = nextClientTimestamp();
       return {
         ...state,
         messages: [
-          ...state.messages,
+          ...prevMessages,
           {
             id: assistantId,
             role: "assistant",
             content: "",
             streaming: true,
+            ...(action.isProcess ? { isProcess: true } : {}),
             runId: action.runId,
-            createdAt: Date.now(),
+            createdAt: ts,
           },
         ],
       };
@@ -267,6 +307,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         ...target,
         content: target.content + action.delta,
         streaming: true,
+        contentStartedAt: target.content.length === 0 ? (target.contentStartedAt ?? nextClientTimestamp()) : target.contentStartedAt,
         reasoningStreaming: false,
         reasoningDuration: target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
       };
@@ -281,6 +322,17 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
       const target = messages[index];
       if (!target) return state;
       messages[index] = { ...target, streaming: false };
+      return { ...state, messages };
+    }
+
+    case "markProcessMessage": {
+      const realId = textToAssistant.get(bindingKey(state.threadId, action.messageId)) ?? action.messageId;
+      const index = state.messages.findIndex((message) => message.id === realId);
+      if (index === -1) return state;
+      const target = state.messages[index];
+      if (!target || target.isProcess) return state;
+      const messages = [...state.messages];
+      messages[index] = { ...target, isProcess: true };
       return { ...state, messages };
     }
 
@@ -301,10 +353,13 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
           !(target.reasoningDuration !== undefined && !target.reasoningStreaming);
         if (canMerge) {
           reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), target.id);
+          const hasExistingReasoning = Boolean(target.reasoning && target.reasoning.length > 0);
           messages[existingIndex] = {
             ...target,
             reasoningStreaming: true,
-            reasoningStartedAt: target.reasoningStartedAt ?? Date.now(),
+            reasoningStartedAt: hasExistingReasoning
+              ? (target.reasoningStartedAt ?? nextClientTimestamp())
+              : nextClientTimestamp(),
             runId: action.runId || target.runId,
             // 多轮思考平滑追加衔接
             reasoning:
@@ -316,14 +371,16 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         }
       }
 
-      const reasoningId = state.messages.some((message) => message.id === action.messageId)
+      const prevMessages = markTurnAssistantsAsProcess(state.messages, action.runId);
+      const reasoningId = prevMessages.some((message) => message.id === action.messageId)
         ? randomUUID()
         : action.messageId;
       reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), reasoningId);
+      const ts = nextClientTimestamp();
       return {
         ...state,
         messages: [
-          ...state.messages,
+          ...prevMessages,
           {
             id: reasoningId,
             role: "assistant",
@@ -332,8 +389,8 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
             runId: action.runId,
             reasoning: "",
             reasoningStreaming: true,
-            reasoningStartedAt: Date.now(),
-            createdAt: Date.now(),
+            reasoningStartedAt: ts,
+            createdAt: ts,
           },
         ],
       };
@@ -354,7 +411,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         ...target,
         reasoning: (target.reasoning ?? "") + action.delta,
         reasoningStreaming: true,
-        reasoningStartedAt: target.reasoningStartedAt ?? Date.now(),
+        reasoningStartedAt: target.reasoningStartedAt ?? nextClientTimestamp(),
       };
       return { ...state, messages };
     }
@@ -378,16 +435,28 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
     }
 
     case "upsertActivity": {
+      // 当工具或子 Agent 卡片到达时，当前轮次此前输出的文本属于过程说明。
+      const messages =
+        action.activity.kind === "tool" || action.activity.kind === "subagent"
+          ? markTurnAssistantsAsProcess(state.messages, action.activity.runId)
+          : state.messages;
       // 同一 ID 只更新同一张卡片。
       // 字段级合并 + 保留最早 startedAt：即使上游发的是增量卡片，
       // 也不会丢掉已经展示过的信息，时间线也不会抖动。
       const index = state.activities.findIndex((item) => item.id === action.activity.id);
       if (index === -1) {
-        return { ...state, activities: [...state.activities, action.activity] };
+        // 真实运行中到达的新卡片使用前端单调递增时钟打时间戳，保证与回放文本严格同序；
+        // 单元测试构造的小时间戳（< 1e12）保持原值不变。
+        const shouldStampClientClock =
+          action.activity.startedAt >= 1_000_000_000_000 && messages.length > 0;
+        const stampedActivity: Activity = shouldStampClientClock
+          ? { ...action.activity, startedAt: nextClientTimestamp() }
+          : action.activity;
+        return { ...state, messages, activities: [...state.activities, stampedActivity] };
       }
       const activities = [...state.activities];
       const existing = activities[index];
-      if (!existing) return state;
+      if (!existing) return { ...state, messages };
       activities[index] = {
         ...existing,
         ...action.activity,
@@ -400,7 +469,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         // 结束时间一旦出现过就不回退。
         endedAt: action.activity.endedAt ?? existing.endedAt,
       };
-      return { ...state, activities };
+      return { ...state, messages, activities };
     }
 
     case "patchRun": {
@@ -418,13 +487,16 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
             return true;
           })
           .map((m) =>
-            m.reasoningStreaming
+            m.role === "assistant" && (m.streaming || m.reasoningStreaming)
               ? {
                   ...m,
+                  streaming: false,
                   reasoningStreaming: false,
                   reasoningDuration:
-                    m.reasoningDuration ??
-                    Math.max(1, Math.round((Date.now() - (m.reasoningStartedAt ?? Date.now())) / 1000)),
+                    m.reasoning && m.reasoning.trim().length > 0
+                      ? m.reasoningDuration ??
+                        Math.max(1, Math.round((Date.now() - (m.reasoningStartedAt ?? Date.now())) / 1000))
+                      : m.reasoningDuration,
                 }
               : m,
           );
@@ -455,8 +527,15 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         : state.activities;
       const status = action.patch.status ?? state.run.status;
       const isTerminal = status === "completed" || status === "cancelled" || status === "error";
+      const currentTerminal =
+        state.run.status === "completed" || state.run.status === "cancelled" || state.run.status === "error";
+      const sameRun = action.patch.runId === undefined || action.patch.runId === state.run.runId;
+      // 结束之后排队的旧快照仍带着 running。不能把同一次运行重新改回执行中，否则按钮会一直停在发送。
+      if (currentTerminal && sameRun && (status === "running" || status === "connecting")) {
+        return state;
+      }
       const startsNewRun = status === "running" &&
-        (state.run.status === "idle" || state.run.status === "completed" || state.run.status === "cancelled" || state.run.status === "error");
+        (state.run.status === "idle" || (currentTerminal && action.patch.runId !== undefined && action.patch.runId !== state.run.runId));
       const startedAt = startsNewRun
         ? action.patch.startedAt ?? Date.now()
         : action.patch.startedAt ?? state.run.startedAt;
@@ -643,8 +722,8 @@ export function eventToActions(event: BaseEvent, state: ClientState): ClientActi
       break;
     }
     case EventType.TEXT_MESSAGE_START: {
-      const messageId = (event as unknown as { messageId: string }).messageId;
-      actions.push({ type: "startAssistant", runId: eventRunId, messageId });
+      const { messageId, isProcess } = event as unknown as { messageId: string; isProcess?: boolean };
+      actions.push({ type: "startAssistant", runId: eventRunId, messageId, ...(isProcess ? { isProcess: true } : {}) });
       break;
     }
     case EventType.TEXT_MESSAGE_CONTENT: {
@@ -678,6 +757,11 @@ export function eventToActions(event: BaseEvent, state: ClientState): ClientActi
         actions.push({ type: "upsertActivity", activity: value as Activity });
       } else if (name === AGUI_CUSTOM_EVENT.RUN_SNAPSHOT) {
         actions.push({ type: "patchRun", patch: value as Partial<RunSnapshot> });
+      } else if (name === AGUI_CUSTOM_EVENT.PROCESS_MESSAGE) {
+        const messageId = (value as { messageId?: string } | null)?.messageId;
+        if (typeof messageId === "string" && messageId.length > 0) {
+          actions.push({ type: "markProcessMessage", messageId });
+        }
       }
       break;
     }

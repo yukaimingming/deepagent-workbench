@@ -455,7 +455,7 @@ export function App() {
     // 必须连同用户消息一起回退（与编辑重发一致）：若保留原消息再发送，
     // handleSend 会再追加一条相同内容的用户消息，导致提示词重复显示。
     rollbackBeforeMessage(userMessage.id);
-    handleSend(userMessage.content);
+    handleSend(userMessage.content, userMessage.attachments);
   };
 
   const handleEditMessage = useCallback(

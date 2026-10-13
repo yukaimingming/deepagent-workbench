@@ -49,7 +49,7 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain('aria-expanded="true"');
   });
 
-  it("正文流式结束后立即汇总为完成，即使运行状态事件尚未结束", () => {
+  it("正文流式结束后立即汇总为完成，同时顶部时间线默认保持展开", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
       finalAnswerComplete: true,
@@ -62,24 +62,27 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).not.toContain("正在分析");
     expect(html).not.toContain("正在思考");
     expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("模型返回的原始推理内容。");
   });
 
-  it("最终正文仍在流式输出时保持过程详情展开", () => {
+  it("工具和思考输出完后停止计时，顶部时间线默认保持展开", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
       finalAnswerComplete: false,
       finalAnswerStreaming: true,
-      runCompleted: true,
+      runCompleted: false,
       durationMs: 83_000,
     }));
 
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain("已完成分析，用时 1分23秒");
+    expect(html).not.toContain("正在分析");
+    expect(html).toContain("模型返回的原始推理内容。");
   });
 
-  it("运行中将分析状态和用时放在同一个 Shimmer 文本中", () => {
+  it("思考还在输出时计时继续，思考明细本身保持折叠", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
-      items: [reasoningItem],
+      items: [{ ...reasoningItem, streaming: true }],
       finalAnswerComplete: false,
       finalAnswerStreaming: false,
       runCompleted: false,
@@ -88,7 +91,10 @@ describe("ProcessActivityGroup 状态展示", () => {
 
     expect(html).toContain("正在分析，用时 0分0秒");
     expect(html).toContain("bg-clip-text");
+    expect(html).toContain(">思考<");
     expect(html).not.toContain("正在思考");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).not.toContain('open=""');
     expect(html).toContain("模型返回的原始推理内容。");
   });
 
@@ -110,7 +116,7 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(hasActiveProcess([])).toBe(false);
   });
 
-  it("思考流式输出时展开原文，工具执行中展开参数和结果", () => {
+  it("思考和工具详情默认都折叠，思考标题保留流光", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [
         { ...reasoningItem, streaming: true, content: "第一段推理" },
@@ -132,8 +138,33 @@ describe("ProcessActivityGroup 状态展示", () => {
 
     expect(html).toContain("README.md");
     expect(html).toContain("正在分析文件");
+    expect(html).toContain(">思考<");
+    expect(html).toContain("bg-clip-text");
     expect(html).toContain("输入参数");
-    expect(html.match(/<details[^>]*open=""/g)?.length).toBe(2);
+    expect(html).not.toContain('open=""');
+  });
+
+  it("只有过程说明时保持分析总线展开，工具详情仍然默认折叠", () => {
+    const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
+      items: [
+        reasoningItem,
+        {
+          id: "message:mid",
+          kind: "assistant" as const,
+          label: "正在整理过程",
+          content: "目录里有三个文件，我再读一下说明。",
+          startedAt: Date.now(),
+          streaming: true,
+        },
+      ],
+      finalAnswerComplete: false,
+      finalAnswerStreaming: false,
+      runCompleted: false,
+    }));
+
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("正在分析");
+    expect(html).toContain("目录里有三个文件，我再读一下说明。");
   });
 
   it("浏览器渲染后思考增量会进入可见文本", async () => {

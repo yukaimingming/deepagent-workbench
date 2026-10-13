@@ -29,7 +29,7 @@ import {
   MessageActions as MessageActionsGroup,
   MessageAction,
 } from "../../components/ai-elements/message.js";
-import { hasActiveProcess, ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
+import { ProcessActivityGroup, type ProcessTimelineItem } from "./process-activity-group.js";
 import { DiffCard, type FileChangeSummary } from "./diff-card.js";
 import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
 import { ApprovalCard } from "./approval-card.js";
@@ -65,13 +65,101 @@ interface ChatMessagesProps {
   onQuickPrompt?: (prompt: string) => void;
 }
 
-/** 将每轮助手过程和工具活动按事件时间合并，最终回答仍留在过程时间线之后。 */
+export interface TurnAnswerState {
+  streaming: boolean;
+  complete: boolean;
+}
+
+export interface TurnProcessTimeline {
+  /** 键是本轮第一条助手消息。时间线不跟着后面的新消息搬家。 */
+  byFinalMessage: Map<string, ProcessTimelineItem[]>;
+  ownedMessageIds: Set<string>;
+  /** 本轮第一条助手消息，即使还没有任何过程项。 */
+  turnHostIds: Set<string>;
+  /** 最终正文的流式/完成状态，挂在时间线宿主上，避免总结出现后总线还停在「正在分析」。 */
+  answerByHost: Map<string, TurnAnswerState>;
+  /** 整轮耗时挂在时间线宿主上，供多段消息场景复用。 */
+  durationByHost: Map<string, number>;
+}
+
+function timelineRank(item: ProcessTimelineItem): number {
+  if (item.kind === "activity") return 2;
+  return item.section === "reasoning" ? 0 : 1;
+}
+
+export function compareTimelineItems(left: ProcessTimelineItem, right: ProcessTimelineItem): number {
+  const leftAt = left.kind === "assistant" ? left.startedAt : left.activity.startedAt;
+  const rightAt = right.kind === "assistant" ? right.startedAt : right.activity.startedAt;
+  if (leftAt !== rightAt) return leftAt - rightAt;
+  return timelineRank(left) - timelineRank(right);
+}
+
+/**
+ * 按时间戳与阶段优先级排列过程行。
+ * 由于客户端归约器已对思考开始、正文开始、工具开始打上单调递增且不可变的启动时间戳，
+ * 按 compareTimelineItems 排序即可保证所有过程项始终处于真实的产生顺序，
+ * 不会出现中间过程说明被排到下一轮思考后面的问题。
+ */
+export function appendTimelineOrder(
+  order: Map<string, number>,
+  items: ProcessTimelineItem[],
+): ProcessTimelineItem[] {
+  const known: ProcessTimelineItem[] = [];
+  const fresh: ProcessTimelineItem[] = [];
+  for (const item of items) {
+    if (order.has(item.id)) known.push(item);
+    else fresh.push(item);
+  }
+  known.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+  fresh.sort(compareTimelineItems);
+
+  const result = [...known];
+  for (const item of fresh) {
+    if (item.id.startsWith("message:")) {
+      const msgId = item.id.slice("message:".length);
+      const reasoningIdx = result.findIndex((existing) => existing.id === `reasoning:${msgId}`);
+      if (reasoningIdx !== -1) {
+        result.splice(reasoningIdx + 1, 0, item);
+        continue;
+      }
+    }
+    result.push(item);
+  }
+
+  order.clear();
+  result.forEach((item, index) => order.set(item.id, index));
+  return result;
+}
+
+function projectTimeline(
+  messages: ChatMessage[],
+  activities: Activity[],
+  previousOrder: ReadonlyMap<string, number>,
+): TurnProcessTimeline & { messages: ChatMessage[]; activities: Activity[]; order: Map<string, number> } {
+  const built = buildTurnProcessTimeline(messages, activities);
+  const order = new Map(previousOrder);
+  const byFinalMessage = new Map<string, ProcessTimelineItem[]>();
+  for (const [hostId, items] of built.byFinalMessage) {
+    byFinalMessage.set(hostId, appendTimelineOrder(order, items));
+  }
+  return { ...built, byFinalMessage, messages, activities, order };
+}
+
+/**
+ * 按时间把一轮里的思考、中间说明和工具排进同一条时间线。
+ * 时间线挂在本轮第一条助手消息上。
+ * 最后一条非过程性质且有正文的消息留在时间线外面，用 Markdown 显示。
+ * 中间说明直接进入时间线按序流式展示，不会先跳到外部 Markdown 再跳回时间线。
+ */
 export function buildTurnProcessTimeline(
   messages: ChatMessage[],
   activities: Activity[],
-): { byFinalMessage: Map<string, ProcessTimelineItem[]>; ownedMessageIds: Set<string> } {
+): TurnProcessTimeline {
   const byFinalMessage = new Map<string, ProcessTimelineItem[]>();
   const ownedMessageIds = new Set<string>();
+  const turnHostIds = new Set<string>();
+  const answerByHost = new Map<string, TurnAnswerState>();
+  const durationByHost = new Map<string, number>();
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || message.role !== "assistant") continue;
@@ -80,12 +168,17 @@ export function buildTurnProcessTimeline(
     let end = index + 1;
     while (end < messages.length && messages[end]?.role !== "user") end += 1;
     const turnMessages = messages.slice(start, end).filter((item) => item.role === "assistant");
-    // 正式答复可能早于单独到达的推理增量；优先选择本轮最后一条含正文的消息，
-    // 这样最终正文始终由独立消息区渲染，不会被收进可折叠过程时间线。
-    const finalMessage = [...turnMessages].reverse().find((item) => item.content.trim()) ?? turnMessages.at(-1);
-    if (!finalMessage || finalMessage.id !== message.id) continue;
+    const host = turnMessages[0];
+    if (!host || host.id !== message.id) continue;
+    turnHostIds.add(host.id);
+
+    const turnDuration = [...turnMessages].reverse().find((item) => item.runDurationMs !== undefined)?.runDurationMs;
+    if (turnDuration !== undefined) {
+      durationByHost.set(host.id, turnDuration);
+    }
+
     const runIds = new Set(turnMessages.map((item) => item.runId).filter((id): id is string => Boolean(id)));
-    const firstTime = turnMessages[0]?.createdAt ?? 0;
+    const firstTime = host.createdAt ?? 0;
     const nextTurnTime = messages[end]?.createdAt;
     const turnActivities = activities.filter((activity) => {
       if (activity.kind !== "tool" && activity.kind !== "subagent") return false;
@@ -94,46 +187,84 @@ export function buildTurnProcessTimeline(
       if (nextTurnTime !== undefined && activity.startedAt >= nextTurnTime) return false;
       return true;
     });
-    if (turnActivities.length === 0 && !turnMessages.some((item) => Boolean(item.reasoning))) continue;
+
+    const isItemProcessMessage = (item: ChatMessage, msgIdx: number): boolean => {
+      if (item.isProcess === true) return true;
+      const hasLaterAssistantContent = turnMessages
+        .slice(msgIdx + 1)
+        .some((later) => Boolean(later.content.trim()));
+      if (hasLaterAssistantContent) return true;
+      const contentStart = item.contentStartedAt ?? item.createdAt ?? 0;
+      if (
+        Boolean(item.content.trim()) &&
+        turnActivities.some((activity) => activity.startedAt >= contentStart)
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    let finalMessage: ChatMessage | null = null;
+    for (let msgIdx = turnMessages.length - 1; msgIdx >= 0; msgIdx -= 1) {
+      const candidate = turnMessages[msgIdx]!;
+      if (candidate.content.trim() && !isItemProcessMessage(candidate, msgIdx)) {
+        finalMessage = candidate;
+        break;
+      }
+    }
+
+    if (finalMessage && finalMessage.content.trim()) {
+      answerByHost.set(host.id, {
+        streaming: finalMessage.streaming,
+        complete: !finalMessage.streaming,
+      });
+    }
+
+    if (
+      turnActivities.length === 0 &&
+      !turnMessages.some((item, msgIdx) => Boolean(item.reasoning) || isItemProcessMessage(item, msgIdx))
+    ) {
+      continue;
+    }
+
     const items: ProcessTimelineItem[] = [];
-    for (const item of turnMessages) {
+    for (let msgIdx = 0; msgIdx < turnMessages.length; msgIdx += 1) {
+      const item = turnMessages[msgIdx]!;
       const createdAt = item.createdAt ?? 0;
+      const isProcess = isItemProcessMessage(item, msgIdx);
       if (item.reasoning) {
         items.push({
-          id: `reasoning:${item.id}`, kind: "assistant",
+          id: `reasoning:${item.id}`,
+          kind: "assistant",
           label: item.reasoningStreaming ? "正在思考" : "已完成分析",
-          content: item.reasoning, startedAt: item.reasoningStartedAt ?? createdAt,
+          content: item.reasoning,
+          startedAt: item.reasoningStartedAt ?? createdAt,
           streaming: item.reasoningStreaming,
           section: "reasoning",
         });
-        if (item.id !== finalMessage.id) ownedMessageIds.add(item.id);
+        if (item.id !== finalMessage?.id && (!item.content.trim() || isProcess)) {
+          ownedMessageIds.add(item.id);
+        }
       }
-      if (item.id !== finalMessage.id && item.content.trim()) {
-        items.push({
-          id: `message:${item.id}`, kind: "assistant",
-          label: item.streaming ? "正在整理过程" : "已完成分析",
-          content: item.content, startedAt: createdAt, streaming: item.streaming,
-        });
+      if (isProcess && (item.content.trim() || (item.streaming && !item.reasoningStreaming))) {
+        if (item.content.trim()) {
+          items.push({
+            id: `message:${item.id}`,
+            kind: "assistant",
+            label: item.streaming ? "正在整理过程" : "已完成分析",
+            content: item.content,
+            startedAt: item.contentStartedAt ?? createdAt,
+            streaming: item.streaming,
+          });
+        }
         ownedMessageIds.add(item.id);
       }
     }
     for (const activity of turnActivities) items.push({ id: activity.id, kind: "activity", activity });
-    items.sort((a, b) => {
-      const at = a.kind === "assistant" ? a.startedAt : a.activity.startedAt;
-      const bt = b.kind === "assistant" ? b.startedAt : b.activity.startedAt;
-      if (at !== bt) return at - bt;
-      // 同一模型节点会把 reasoning 占位和正文映射到同一条消息、同一时间戳。
-      // 先显示推理，再显示模型中间文本，最后显示同时刻工具活动；比较器必须
-      // 对同类项目返回 0，避免不稳定排序让内容反复换位或落到正文区。
-      const rank = (item: ProcessTimelineItem): number => {
-        if (item.kind === "activity") return 2;
-        return item.section === "reasoning" ? 0 : 1;
-      };
-      return rank(a) - rank(b);
-    });
-    byFinalMessage.set(finalMessage.id, items);
+    items.sort(compareTimelineItems);
+    byFinalMessage.set(host.id, items);
   }
-  return { byFinalMessage, ownedMessageIds };
+  return { byFinalMessage, ownedMessageIds, turnHostIds, answerByHost, durationByHost };
 }
 
 export function findPromotedMessageId(
@@ -153,15 +284,6 @@ export function shouldHideIntermediateAssistantText(
   promotedId: string | null,
 ): boolean {
   return toolActivities.length > 0 && message.content.length > 0 && message.id !== promotedId && !message.streaming;
-}
-
-/** 从活动详情里提取输入和输出 */
-function toolIo(activity: Activity): { input: unknown; output: string | undefined } {
-
-  const detail = activity.detail as { input?: unknown; output?: unknown } | undefined;
-  const input = detail?.input;
-  const output = typeof detail?.output === "string" ? detail.output : undefined;
-  return { input, output };
 }
 
 /** 映射审批中断决策 */
@@ -206,10 +328,18 @@ export function ChatMessages({
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
-  const { byFinalMessage: turnTimelineByMessage, ownedMessageIds: timelineOwnedMessageIds } = useMemo(
-    () => buildTurnProcessTimeline(messages, activities),
-    [messages, activities],
-  );
+  // 顺序表必须跟这次渲染一起更新。拖到 effect 里的话，下一条工具会赶在顺序落盘前按时间戳插回去。
+  const [timelineView, setTimelineView] = useState(() => projectTimeline(messages, activities, new Map()));
+  if (timelineView.messages !== messages || timelineView.activities !== activities) {
+    setTimelineView(projectTimeline(messages, activities, timelineView.order));
+  }
+  const {
+    byFinalMessage: turnTimelineByMessage,
+    ownedMessageIds: timelineOwnedMessageIds,
+    turnHostIds,
+    answerByHost,
+    durationByHost,
+  } = timelineView;
 
   // 用户消息原地编辑状态
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -448,70 +578,42 @@ export function ChatMessages({
 
               // 助手 Agent 消息（无头像、左对齐纯净排版）
 
-              // 严格按 runId 归属当前轮次的活动，绝不把其他轮次或历史工具倾倒到本轮
-              const currentRunId = message.runId;
-              const rawToolActivities = activities
-                .filter((activity) => {
-                  if (activity.kind !== "tool") return false;
-                  if (currentRunId && activity.runId) {
-                    return activity.runId === currentRunId;
-                  }
-                  // 若无明确 runId 归属，且当前是最后一条 assistant 消息，则承载活动，无论运行中还是已结束绝不消失
-                  return isLast && (!currentRunId || !activity.runId);
-                })
-                .sort((a, b) => a.startedAt - b.startedAt);
-
-              // 严格按工具名归一化去重：同一轮次内同一个工具只保留最新的一条，绝不重复展示两个同名标签或卡片
-              const toolMap = new Map<string, Activity>();
-              for (const activity of rawToolActivities) {
-                const existing = toolMap.get(activity.title);
-                if (!existing) {
-                  toolMap.set(activity.title, activity);
-                } else {
-                  // 优先保留具有明确输入参数的、或最新状态的记录
-                  const existingHasInput = Boolean(toolIo(existing).input);
-                  const currentHasInput = Boolean(toolIo(activity).input);
-                  if (!existingHasInput && currentHasInput) {
-                    toolMap.set(activity.title, activity);
-                  } else if (activity.status === "completed" || activity.status === "failed") {
-                    toolMap.set(activity.title, activity);
-                  } else {
-                    toolMap.set(activity.title, activity);
-                  }
-                }
-              }
-              const currentToolActivities = Array.from(toolMap.values()).sort(
-                (a, b) => a.startedAt - b.startedAt,
-              );
-
               const processItems = turnTimelineByMessage.get(message.id) ?? [];
               const messageIsInTimeline = timelineOwnedMessageIds.has(message.id);
               if (messageIsInTimeline && processItems.length === 0) return null;
-              const timelineIsActive = isLast && (
-                runSnapshot?.status === "connecting" ||
-                runSnapshot?.status === "running" ||
-                runSnapshot?.status === "waiting_approval"
-              );
+              const runIsLive = runSnapshot?.status === "connecting"
+                || runSnapshot?.status === "running"
+                || runSnapshot?.status === "waiting_approval";
+              const hasLaterUserMessage = messages.slice(idx + 1).some((item) => item.role === "user");
+              const isLatestTurn = !hasLaterUserMessage;
+              // 空的「正在分析」只出现在本轮第一条助手消息上。后面的消息不再另起一条总线。
+              const showLivePlaceholder = processItems.length === 0
+                && turnHostIds.has(message.id)
+                && isLatestTurn
+                && runIsLive;
               // 思考还在增量到达时先不画正文，避免两段抢同一条消息。
-              // 工具和子任务不再挡住正文：增量一到就用流式组件显示，不再等整段过程结束。
+              // 已被时间线收下的说明（含运行中、工具之后的中间返回）不在外面再画一份 Markdown。
               const isReasoningStreaming = message.reasoningStreaming === true;
-              const hasActiveTimelineWork = hasActiveProcess(processItems, currentToolActivities);
               const shouldShowMessageContent =
                 !messageIsInTimeline && !isReasoningStreaming && (message.content.length > 0 || message.streaming);
+              const turnAnswer = answerByHost.get(message.id);
+              const hostDurationMs = durationByHost.get(message.id) ?? message.runDurationMs;
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
-                  {/* 3. 工具调用提示：完全去掉复杂卡片，按工具名归一化展示干净的单行提示 */}
+                  {/* 过程时间线固定在本轮第一条助手消息上，工具按出现顺序往下追加。 */}
+                  {(processItems.length > 0 || showLivePlaceholder) && (
                   <ProcessActivityGroup
                     key={message.id}
                     items={processItems}
-                    isActive={timelineIsActive}
+                    isActive={showLivePlaceholder || (runIsLive && processItems.length > 0 && isLatestTurn)}
                     startedAt={runSnapshot?.startedAt}
-                    finalAnswerComplete={shouldShowMessageContent && !message.streaming && message.content.trim().length > 0 && !hasActiveTimelineWork}
-                    finalAnswerStreaming={shouldShowMessageContent && message.streaming && !hasActiveTimelineWork}
-                    durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
-                    runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
+                    finalAnswerComplete={turnAnswer?.complete ?? false}
+                    finalAnswerStreaming={turnAnswer?.streaming ?? false}
+                    durationMs={hostDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
+                    runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : hostDurationMs !== undefined}
                   />
+                  )}
 
                   {/* 4. 人工安全审批卡片 */}
                   {isLast &&

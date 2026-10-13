@@ -8,7 +8,7 @@
  * - 中断后进入等待审批状态。
  */
 
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { EventType, type BaseEvent } from "@ag-ui/client";
 import { AGUI_CUSTOM_EVENT, type Activity, type RunSnapshot } from "@deepagent/shared";
 
@@ -60,6 +60,18 @@ describe("消息流", () => {
     expect(state.messages[0]?.content).toBe("你好，世界");
     expect(state.messages[0]?.streaming).toBe(false);
     expect(state.messages[0]?.runId).toBe("r1");
+    expect(state.messages[0]?.contentStartedAt).toEqual(expect.any(Number));
+  });
+
+  it("后续正文增量不改写正文开始时间", () => {
+    const started = apply([
+      { type: "startAssistant", runId: "r1", messageId: "m1" },
+      { type: "appendAssistant", messageId: "m1", delta: "第一段" },
+    ]);
+    const contentStartedAt = started.messages[0]?.contentStartedAt;
+    const next = reduceClientEvent(started, { type: "appendAssistant", messageId: "m1", delta: "第二段" });
+    expect(next.messages[0]?.content).toBe("第一段第二段");
+    expect(next.messages[0]?.contentStartedAt).toBe(contentStartedAt);
   });
 
   it("用户消息与助手消息分开存储", () => {
@@ -220,6 +232,13 @@ describe("运行状态与中断", () => {
       runEndedAt: 7_000,
       runDurationMs: 6_000,
     });
+
+    state = reduceClientEvent(state, {
+      type: "patchRun",
+      patch: { status: "running", runId: "run-2", progressNote: "迟到的快照" },
+    });
+    expect(state.run.status).toBe("completed");
+    expect(state.run.progressNote).not.toBe("迟到的快照");
 
     state = reduceClientEvent(state, {
       type: "patchRun",

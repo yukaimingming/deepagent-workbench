@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HttpAgent, type RunAgentParameters } from "@ag-ui/client";
+import { EventType, HttpAgent, type RunAgentParameters } from "@ag-ui/client";
 import type { ContentPart } from "@ag-ui/client";
 import type { BaseEvent } from "@ag-ui/client";
 import type { FileUIPart } from "ai";
@@ -23,7 +23,14 @@ import {
   type ClientAction,
   type ClientState,
 } from "./client-reducer.js";
-import { takeRevealStep } from "./stream-playback.js";
+import {
+  collectProcessMessageIds,
+  hasLookaheadSignalForMessage,
+  isSettledRunStatus,
+  queuedContentLength,
+  REVEAL_CHARS,
+  takeRevealStep,
+} from "./stream-playback.js";
 import type { PermissionMode } from "@deepagent/shared";
 
 /** 发起一轮运行时需要透传给服务端适配层的配置。 */
@@ -115,6 +122,20 @@ export function useAgentClient(serverUrl: string): AgentClient {
   /** 每个会话尚未揭示的事件。思考和正文按拍切开，工具事件排在已到达文本之后。 */
   const playbackQueuesRef = useRef(new Map<string, BaseEvent[]>());
   const playbackActiveRef = useRef(new Set<string>());
+  /** 唤醒正在等待下一拍定时器的回放循环（收到前瞻信号或取消时立即唤醒）。 */
+  const playbackWakeRef = useRef(new Map<string, () => void>());
+  /** 当前正在做过程消息前瞻等待的 messageId（threadId -> messageId）。 */
+  const lookaheadWaitingRef = useRef(new Map<string, string>());
+  /** 已经完成过前瞻判定的文本消息 ID 集合。 */
+  const lookaheadDoneRef = useRef(new Set<string>());
+
+  const wakePlayback = useCallback((threadId: string): void => {
+    const wake = playbackWakeRef.current.get(threadId);
+    if (wake) {
+      playbackWakeRef.current.delete(threadId);
+      wake();
+    }
+  }, []);
 
   /** 取得（或惰性创建）指定线程的 HttpAgent。 */
   const getAgent = useCallback(
@@ -143,14 +164,59 @@ export function useAgentClient(serverUrl: string): AgentClient {
 
   const clearPlayback = useCallback((threadId: string): void => {
     playbackQueuesRef.current.set(threadId, []);
+    lookaheadWaitingRef.current.delete(threadId);
+    wakePlayback(threadId);
+  }, [wakePlayback]);
+
+  /** 更新某个线程的运行中标记。 */
+  const setRunningFor = useCallback((threadId: string, running: boolean): void => {
+    if (runningRef.current[threadId] === running) return;
+    runningRef.current = { ...runningRef.current, [threadId]: running };
+    setRunningMap(runningRef.current);
   }, []);
 
+  const releaseRunningIfSettled = useCallback((threadId: string): void => {
+    const status = threadsRef.current[threadId]?.run.status;
+    if (isSettledRunStatus(status)) setRunningFor(threadId, false);
+  }, [setRunningFor]);
+
+  /** 同步按顺序冲刷指定线程队列中剩余的全部事件（用于报错或强制兜底）。 */
+  const flushPlayback = useCallback((threadId: string): void => {
+    lookaheadWaitingRef.current.delete(threadId);
+    wakePlayback(threadId);
+    const queue = playbackQueuesRef.current.get(threadId);
+    if (!queue || queue.length === 0) return;
+    const processIds = collectProcessMessageIds(queue);
+    while (queue.length > 0) {
+      if (cancelledRef.current.has(threadId)) {
+        queue.length = 0;
+        break;
+      }
+      let next = queue.shift();
+      if (!next) break;
+      if (next.type === EventType.TEXT_MESSAGE_START) {
+        const msgId = (next as { messageId?: string }).messageId ?? "";
+        if (msgId && processIds.has(msgId)) {
+          next = { ...next, isProcess: true } as BaseEvent;
+        }
+      }
+      const current = threadsRef.current[threadId] ?? createInitialState(threadId);
+      applyActions(threadId, eventToActions(next, current));
+    }
+    releaseRunningIfSettled(threadId);
+  }, [applyActions, releaseRunningIfSettled, wakePlayback]);
+
+  const pumpPlaybackRef = useRef<(threadId: string) => void>(() => {});
+
+  /** 等待指定线程的回放队列自然按拍播放完毕。 */
   const waitForPlayback = useCallback(async (threadId: string): Promise<void> => {
     for (;;) {
       const pending = playbackQueuesRef.current.get(threadId);
-      if (!playbackActiveRef.current.has(threadId) && (!pending || pending.length === 0)) return;
+      const active = playbackActiveRef.current.has(threadId);
+      if (!active && (!pending || pending.length === 0)) return;
+      if (!active && pending && pending.length > 0) pumpPlaybackRef.current(threadId);
       if (cancelledRef.current.has(threadId)) return;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 12));
     }
   }, []);
 
@@ -166,14 +232,77 @@ export function useAgentClient(serverUrl: string): AgentClient {
             queue.length = 0;
             break;
           }
-          const next = queue[0];
+          let next = queue[0];
           if (!next) break;
-          const reveal = takeRevealStep(next);
+
+          // 对即将开始揭示的文本消息做短暂前瞻：若它是伴随工具调用的简短过程说明，
+          // 等 PROCESS_MESSAGE / ACTIVITY_DELTA 进队后再揭示第 1 个字，使其直接从时间线内部流式长出。
+          if (next.type === EventType.TEXT_MESSAGE_START) {
+            const msgId = (next as { messageId?: string }).messageId ?? "";
+            if (
+              msgId &&
+              !hasLookaheadSignalForMessage(queue, msgId) &&
+              !lookaheadDoneRef.current.has(msgId)
+            ) {
+              lookaheadDoneRef.current.add(msgId);
+              lookaheadWaitingRef.current.set(threadId, msgId);
+              await new Promise<void>((resolve) => {
+                const timer = setTimeout(() => {
+                  lookaheadWaitingRef.current.delete(threadId);
+                  playbackWakeRef.current.delete(threadId);
+                  resolve();
+                }, 180);
+                playbackWakeRef.current.set(threadId, () => {
+                  clearTimeout(timer);
+                  lookaheadWaitingRef.current.delete(threadId);
+                  playbackWakeRef.current.delete(threadId);
+                  resolve();
+                });
+              });
+              if (cancelledRef.current.has(threadId)) {
+                queue.length = 0;
+                break;
+              }
+              next = queue[0];
+              if (!next) break;
+            }
+          }
+
+          const processIds = collectProcessMessageIds(queue);
+          if (next.type === EventType.TEXT_MESSAGE_START) {
+            const msgId = (next as { messageId?: string }).messageId ?? "";
+            if (msgId && processIds.has(msgId)) {
+              next = { ...next, isProcess: true } as BaseEvent;
+              queue[0] = next;
+            }
+          } else if (next.type === EventType.TEXT_MESSAGE_CONTENT) {
+            const msgId = (next as { messageId?: string }).messageId ?? "";
+            if (msgId && processIds.has(msgId)) {
+              applyActions(threadId, [{ type: "markProcessMessage", messageId: msgId }]);
+            }
+          }
+
+          const backlog = queuedContentLength(queue);
+          const dynamicStep = backlog > 32 ? Math.max(REVEAL_CHARS, Math.ceil(backlog / 5)) : REVEAL_CHARS;
+          const reveal = takeRevealStep(next, dynamicStep);
           queue.shift();
           if (reveal.rest) queue.unshift(reveal.rest);
           const current = threadsRef.current[threadId] ?? createInitialState(threadId);
           applyActions(threadId, eventToActions(reveal.emit, current));
-          if (reveal.waitMs > 0) await new Promise((resolve) => setTimeout(resolve, reveal.waitMs));
+          releaseRunningIfSettled(threadId);
+          if (reveal.waitMs > 0 && queue.length > 0) {
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(() => {
+                playbackWakeRef.current.delete(threadId);
+                resolve();
+              }, reveal.waitMs);
+              playbackWakeRef.current.set(threadId, () => {
+                clearTimeout(timer);
+                playbackWakeRef.current.delete(threadId);
+                resolve();
+              });
+            });
+          }
         }
       } finally {
         playbackActiveRef.current.delete(threadId);
@@ -181,21 +310,26 @@ export function useAgentClient(serverUrl: string): AgentClient {
       }
     };
     void step();
-  }, [applyActions]);
+  }, [applyActions, releaseRunningIfSettled]);
+
+  pumpPlaybackRef.current = pumpPlayback;
 
   const enqueueEvent = useCallback((threadId: string, event: BaseEvent): void => {
+    if (event.type === EventType.RUN_STARTED) {
+      const current = threadsRef.current[threadId] ?? createInitialState(threadId);
+      applyActions(threadId, eventToActions(event, current));
+      return;
+    }
     const queue = playbackQueuesRef.current.get(threadId) ?? [];
     queue.push(event);
     playbackQueuesRef.current.set(threadId, queue);
+    // 若当前队首正在做短文本前瞻等待，且本事件的到来已满足前瞻判定条件，0ms 立即唤醒开始流式揭示。
+    const waitingMsgId = lookaheadWaitingRef.current.get(threadId);
+    if (waitingMsgId && hasLookaheadSignalForMessage(queue, waitingMsgId)) {
+      wakePlayback(threadId);
+    }
     pumpPlayback(threadId);
-  }, [pumpPlayback]);
-
-  /** 更新某个线程的运行中标记。 */
-  const setRunningFor = useCallback((threadId: string, running: boolean): void => {
-    if (runningRef.current[threadId] === running) return;
-    runningRef.current = { ...runningRef.current, [threadId]: running };
-    setRunningMap(runningRef.current);
-  }, []);
+  }, [applyActions, pumpPlayback, wakePlayback]);
 
   /** 切换激活会话（不中断任何后台运行）。 */
   const switchActiveThread = useCallback((threadId: string): void => {
@@ -254,24 +388,15 @@ export function useAgentClient(serverUrl: string): AgentClient {
             enqueueEvent(threadId, event);
           },
           onRunFailed: ({ error }) => {
+            flushPlayback(threadId);
             applyActions(threadId, [
               { type: "patchRun", patch: { status: "error", error: String(error) } },
             ]);
+            setRunningFor(threadId, false);
           },
         });
-        // 先把已经到达的思考和正文逐拍揭示完，再判断运行有没有正常收尾。
-        await waitForPlayback(threadId);
-        // 流结束但没有收到 RUN_FINISHED / RUN_ERROR 时，不要让运行状态与 Todo
-        // 永久停留在“进行中”；将其归类为断流错误，保留已完成项并释放当前项。
-        if (!cancelledRef.current.has(threadId) && threadsRef.current[threadId]?.run.status === "running") {
-          applyActions(threadId, [
-            {
-              type: "patchRun",
-              patch: { status: "error", error: "Agent 流意外结束，请检查连接后继续任务" },
-            },
-          ]);
-        }
       } catch (error) {
+        flushPlayback(threadId);
         if (cancelledRef.current.has(threadId)) {
           applyActions(threadId, [
             { type: "patchRun", patch: { status: "cancelled", progressNote: "已取消" } },
@@ -289,11 +414,31 @@ export function useAgentClient(serverUrl: string): AgentClient {
         }
       } finally {
         await waitForPlayback(threadId);
+        if (!cancelledRef.current.has(threadId)) {
+          const current = threadsRef.current[threadId];
+          const status = current?.run.status;
+          if (status === "running" || status === "connecting") {
+            const hasAnswer = current?.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                (message.content.trim().length > 0 || Boolean(message.reasoning && message.reasoning.trim().length > 0)),
+            ) ?? false;
+            applyActions(threadId, [
+              {
+                type: "patchRun",
+                patch: hasAnswer
+                  ? { status: "completed" }
+                  : { status: "error", error: "Agent 流意外结束，请检查连接后继续任务" },
+              },
+            ]);
+          }
+        }
         cancelledRef.current.delete(threadId);
+        // 这一轮的流与按序回放均已结束，按钮和侧栏立即退出执行中。
         setRunningFor(threadId, false);
       }
     },
-    [applyActions, enqueueEvent, getAgent, setRunningFor, waitForPlayback],
+    [applyActions, enqueueEvent, flushPlayback, getAgent, setRunningFor, waitForPlayback],
   );
 
   /** 发送一条新消息到指定会话。 */
@@ -313,6 +458,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
       const agent = getAgent(threadId);
       const messageId = cryptoRandomId();
       const assistantMessageId = cryptoRandomId();
+      const runId = cryptoRandomId();
       const now = Date.now();
       applyActions(threadId, [
         {
@@ -324,7 +470,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
         { type: "startPendingAssistant", messageId: assistantMessageId, startedAt: now },
         {
           type: "patchRun",
-          patch: { status: "running", error: null, interrupts: [], progressNote: null },
+          patch: { status: "running", runId, error: null, interrupts: [], progressNote: null },
         },
       ]);
 
@@ -334,7 +480,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
         role: "user",
         content: toAguiContent(trimmed, attachments),
       });
-      await runOnce(threadId, buildRunParameters(cryptoRandomId(), options));
+      await runOnce(threadId, buildRunParameters(runId, options));
     },
     [applyActions, ensureThread, getAgent, runOnce],
   );
@@ -516,24 +662,38 @@ export function useAgentClient(serverUrl: string): AgentClient {
   const restoreCheckpoint = useCallback(
     (messageId: string): void => {
       const threadId = activeThreadIdRef.current;
+      clearPlayback(threadId);
       applyActions(threadId, [{ type: "restoreCheckpoint", messageId }]);
       const agent = getAgent(threadId);
-      const index = agent.messages.findIndex((message) => message.id === messageId);
-      if (index !== -1) agent.setMessages(agent.messages.slice(0, index + 1));
+      const kept = threadsRef.current[threadId]?.messages ?? [];
+      agent.setMessages(
+        kept.map((message) =>
+          message.role === "user"
+            ? { id: message.id, role: "user" as const, content: toAguiContent(message.content, message.attachments) }
+            : { id: message.id, role: "assistant" as const, content: message.content },
+        ),
+      );
     },
-    [applyActions, getAgent],
+    [applyActions, clearPlayback, getAgent],
   );
 
   /** 重新编辑前回退：彻底丢弃被编辑消息及后续所有内容，避免产生重复消息。 */
   const rollbackBeforeMessage = useCallback(
     (messageId: string): void => {
       const threadId = activeThreadIdRef.current;
+      clearPlayback(threadId);
       applyActions(threadId, [{ type: "rollbackBeforeMessage", messageId }]);
       const agent = getAgent(threadId);
-      const index = agent.messages.findIndex((message) => message.id === messageId);
-      if (index !== -1) agent.setMessages(agent.messages.slice(0, index));
+      const kept = threadsRef.current[threadId]?.messages ?? [];
+      agent.setMessages(
+        kept.map((message) =>
+          message.role === "user"
+            ? { id: message.id, role: "user" as const, content: toAguiContent(message.content, message.attachments) }
+            : { id: message.id, role: "assistant" as const, content: message.content },
+        ),
+      );
     },
-    [applyActions, getAgent],
+    [applyActions, clearPlayback, getAgent],
   );
 
   /**
@@ -561,8 +721,11 @@ export function useAgentClient(serverUrl: string): AgentClient {
   );
 
   const runningThreadIds = useMemo(
-    () => Object.keys(runningMap).filter((id) => runningMap[id] === true),
-    [runningMap],
+    () =>
+      Object.keys(runningMap).filter(
+        (id) => runningMap[id] === true && !isSettledRunStatus(threads[id]?.run.status),
+      ),
+    [runningMap, threads],
   );
 
   const send = useCallback(
@@ -605,7 +768,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
   return {
     state,
     threadId: state.threadId,
-    isRunning: runningMap[activeThreadId] === true,
+    isRunning: runningMap[activeThreadId] === true && !isSettledRunStatus(state.run.status),
     runningThreadIds,
     allStates: threads,
     send,

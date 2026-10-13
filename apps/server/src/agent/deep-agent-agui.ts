@@ -191,6 +191,21 @@ export class DeepAgentAgui extends AbstractAgent {
       signal,
     };
 
+    if (isResume) {
+      // 审批续跑需要保留已有 checkpoint，同时把已存在消息里的 tool_calls 记入 seenToolCalls，
+      // 避免中断前的工具调用在续跑时被重复当作新工具推送。
+      const existingTuple = await this.checkpointer.getTuple(config);
+      const existingMessages = (
+        existingTuple?.checkpoint?.channel_values as { messages?: unknown } | undefined
+      )?.messages;
+      adapter.markHistoricalMessages(existingMessages);
+    } else {
+      // 非审批续跑时，前端 input.messages 已携带当前线程完整的有效对话历史（含重试/编辑回滚后的历史）。
+      // 清理该线程旧 checkpoint，防止「重新生成回答」或「编辑消息重发」时旧轮次的 AIMessage(tool_calls)
+      // 与 ToolMessage 残留在 LangGraph 状态中并在第一帧被重放出来。
+      await this.checkpointer.deleteThread(input.threadId);
+    }
+
     const state = isResume
       ? DeepAgentToAguiAdapter.decisionsToCommand(resumeToDecisions(resume))
       : {
@@ -202,15 +217,15 @@ export class DeepAgentAgui extends AbstractAgent {
 
     const run = await bundle.agent.streamEvents(state, { ...config, version: "v3" as const });
 
-    // 并发消费各个投影；任一侧抛错都要让整体失败。
-    const consumers: Array<Promise<void>> = [
-      adapter.consumeMessages(run).catch((error: unknown) => {
-        throw error;
-      }),
+    // 并发消费各个投影；消息流与 run.output 为主完成条件，辅助投影若挂起则在短暂宽限后放行。
+    const messagesDone = adapter.consumeMessages(run).catch((error: unknown) => {
+      throw error;
+    });
+    const auxConsumersDone = Promise.all([
       adapter.consumeToolCalls(run),
       adapter.consumeSubagents(run),
       adapter.consumeValues(run),
-    ];
+    ]);
 
     // 等待运行本身完成，再收尾。
     const runFinished = run.output.then(
@@ -220,7 +235,11 @@ export class DeepAgentAgui extends AbstractAgent {
       },
     );
 
-    await Promise.all([...consumers, runFinished]);
+    const coreDone = Promise.all([messagesDone, runFinished]);
+    await Promise.race([
+      Promise.all([coreDone, auxConsumersDone]),
+      coreDone.then(() => new Promise<void>((resolve) => setTimeout(resolve, 150))),
+    ]);
 
     const interrupts = run.interrupts ?? [];
     if (interrupts.length > 0) {

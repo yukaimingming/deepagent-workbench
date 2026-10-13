@@ -9,6 +9,8 @@ export const AGUI_CUSTOM_EVENT = {
   ACTIVITY_DELTA: "deepagent:activity",
   /** 运行状态快照（状态、进度摘要、待审批中断）。 */
   RUN_SNAPSHOT: "deepagent:run-snapshot",
+  /** 标记某条文本消息属于伴随工具调用的中间过程说明（在时间线内部按序流式输出）。 */
+  PROCESS_MESSAGE: "deepagent:process-message",
   /** 模型列表获取失败等原因的提示。 */
   NOTICE: "deepagent:notice",
 } as const;
