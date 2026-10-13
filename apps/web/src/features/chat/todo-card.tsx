@@ -39,7 +39,10 @@ export function TodoCard({ activity }: TodoCardProps) {
   const isAllDone = detail.completed >= detail.total && detail.total > 0;
 
   return (
-    <Queue className="my-1 w-fit max-w-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)]">
+    <Queue
+      data-testid="todo-queue-card"
+      className="my-0 w-fit max-w-full border-[var(--color-border-subtle)] bg-[var(--color-surface-1)]"
+    >
       <QueueSection defaultOpen={false}>
         <QueueSectionTrigger className="bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-3)] text-[var(--color-text-secondary)]">
           <QueueSectionLabel

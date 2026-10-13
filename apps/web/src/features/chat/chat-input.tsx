@@ -283,113 +283,114 @@ export function ChatInput({
   return (
     <div className="shrink-0 bg-black px-4 py-4">
       <div className="mx-auto w-full max-w-3xl">
-        <div className="mb-2 flex min-w-0 items-end gap-2">
-          {/* 工作区选择器保持在左侧；待办状态在其右侧同行展示。 */}
+        <div className="mb-2 flex min-w-0 items-center gap-2">
+          {/* 工作区选择器保持在左侧 */}
           <div className="relative flex w-fit shrink-0 items-center" ref={workspaceDropdownRef}>
-          <button
-            type="button"
-            data-testid="workspace-mode-selector"
-            onClick={() => {
-              setIsWorkspaceDropdownOpen((v) => !v);
-              setIsModelDropdownOpen(false);
-              setIsEffortDropdownOpen(false);
-            }}
-            className="group inline-flex items-center gap-1.5 rounded-xl bg-transparent hover:bg-zinc-900/80 px-2.5 py-1 text-[13px] font-medium text-zinc-100 transition-colors select-none max-w-[280px] border-0 outline-none"
-            title={isDirectChat ? "当前为直接聊天模式（无工作区）" : `当前工作区：${currentWorkspacePath}`}
-          >
-            {isDirectChat ? (
-              <MessageSquareIcon className="size-4 text-zinc-300 shrink-0" />
-            ) : (
-              <FolderIcon className="size-4 text-zinc-300 shrink-0" />
-            )}
-            <span className="truncate">
-              {isDirectChat ? "直接聊天" : currentWorkspaceName}
-            </span>
-            <ChevronDownIcon
-              className={cn(
-                "size-3.5 text-zinc-400 shrink-0 transition-transform duration-200 ml-0.5",
-                isWorkspaceDropdownOpen && "rotate-180 text-zinc-200",
-              )}
-            />
-          </button>
-
-          {/* 下拉菜单面板（大圆角、深灰底、无多余线条、移动悬浮高亮） */}
-          {isWorkspaceDropdownOpen && (
-            <div className="workspace-dropdown-panel absolute left-0 bottom-full mb-2 z-50 w-64 rounded-2xl bg-[#242427] p-1.5 shadow-2xl border-0 animate-in fade-in zoom-in-95 duration-100">
-              {/* 选项 1：直接聊天模式 */}
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectWorkspace?.(null);
-                  setIsWorkspaceDropdownOpen(false);
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors select-none",
-                  isDirectChat
-                    ? "bg-[#2f2f35] text-white font-medium"
-                    : "text-zinc-200 hover:bg-[#2f2f35] hover:text-white",
-                )}
-              >
+            <button
+              type="button"
+              data-testid="workspace-mode-selector"
+              onClick={() => {
+                setIsWorkspaceDropdownOpen((v) => !v);
+                setIsModelDropdownOpen(false);
+                setIsEffortDropdownOpen(false);
+              }}
+              className="group inline-flex items-center gap-1.5 rounded-xl bg-transparent hover:bg-zinc-900/80 px-2.5 py-1 text-[13px] font-medium text-zinc-100 transition-colors select-none max-w-[280px] border-0 outline-none"
+              title={isDirectChat ? "当前为直接聊天模式（无工作区）" : `当前工作区：${currentWorkspacePath}`}
+            >
+              {isDirectChat ? (
                 <MessageSquareIcon className="size-4 text-zinc-300 shrink-0" />
-                <span className="truncate">直接聊天</span>
-                {isDirectChat && <CheckIcon className="size-4 text-white shrink-0 ml-auto" />}
-              </button>
+              ) : (
+                <FolderIcon className="size-4 text-zinc-300 shrink-0" />
+              )}
+              <span className="truncate">
+                {isDirectChat ? "直接聊天" : currentWorkspaceName}
+              </span>
+              <ChevronDownIcon
+                className={cn(
+                  "size-3.5 text-zinc-400 shrink-0 transition-transform duration-200 ml-0.5",
+                  isWorkspaceDropdownOpen && "rotate-180 text-zinc-200",
+                )}
+              />
+            </button>
 
-              {/* 选项 2..N：工作区列表（无多余分割线，干净紧凑排列） */}
-              <div className="max-h-[220px] overflow-y-auto space-y-0.5 my-0.5 scrollbar-thin scrollbar-thumb-zinc-700">
-                {customWorkspaces && customWorkspaces.length > 0
-                  ? customWorkspaces.map((wsPath) => {
-                      const isSelected =
-                        !isDirectChat &&
-                        (currentWorkspacePath === wsPath ||
-                          currentWorkspacePath.toLowerCase() === wsPath.toLowerCase());
-                      const name = extractFolderName(wsPath);
-                      return (
-                        <button
-                          key={wsPath}
-                          type="button"
-                          onClick={() => {
-                            onSelectWorkspace?.(wsPath);
-                            setIsWorkspaceDropdownOpen(false);
-                          }}
-                          className={cn(
-                            "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors select-none",
-                            isSelected
-                              ? "bg-[#2f2f35] text-white font-medium"
-                              : "text-zinc-200 hover:bg-[#2f2f35] hover:text-white",
-                          )}
-                        >
-                          <FolderIcon className="size-4 text-zinc-300 shrink-0" />
-                          <span className="truncate">{name}</span>
-                          {isSelected && <CheckIcon className="size-4 text-white shrink-0 ml-auto" />}
-                        </button>
-                      );
-                    })
-                  : null}
+            {/* 下拉菜单面板（大圆角、深灰底、无多余线条、移动悬浮高亮） */}
+            {isWorkspaceDropdownOpen && (
+              <div className="workspace-dropdown-panel absolute left-0 bottom-full mb-2 z-50 w-64 rounded-2xl bg-[#242427] p-1.5 shadow-2xl border-0 animate-in fade-in zoom-in-95 duration-100">
+                {/* 选项 1：直接聊天模式 */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectWorkspace?.(null);
+                    setIsWorkspaceDropdownOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors select-none",
+                    isDirectChat
+                      ? "bg-[#2f2f35] text-white font-medium"
+                      : "text-zinc-200 hover:bg-[#2f2f35] hover:text-white",
+                  )}
+                >
+                  <MessageSquareIcon className="size-4 text-zinc-300 shrink-0" />
+                  <span className="truncate">直接聊天</span>
+                  {isDirectChat && <CheckIcon className="size-4 text-white shrink-0 ml-auto" />}
+                </button>
+
+                {/* 选项 2..N：工作区列表（无多余分割线，干净紧凑排列） */}
+                <div className="max-h-[220px] overflow-y-auto space-y-0.5 my-0.5 scrollbar-thin scrollbar-thumb-zinc-700">
+                  {customWorkspaces && customWorkspaces.length > 0
+                    ? customWorkspaces.map((wsPath) => {
+                        const isSelected =
+                          !isDirectChat &&
+                          (currentWorkspacePath === wsPath ||
+                            currentWorkspacePath.toLowerCase() === wsPath.toLowerCase());
+                        const name = extractFolderName(wsPath);
+                        return (
+                          <button
+                            key={wsPath}
+                            type="button"
+                            onClick={() => {
+                              onSelectWorkspace?.(wsPath);
+                              setIsWorkspaceDropdownOpen(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition-colors select-none",
+                              isSelected
+                                ? "bg-[#2f2f35] text-white font-medium"
+                                : "text-zinc-200 hover:bg-[#2f2f35] hover:text-white",
+                            )}
+                          >
+                            <FolderIcon className="size-4 text-zinc-300 shrink-0" />
+                            <span className="truncate">{name}</span>
+                            {isSelected && <CheckIcon className="size-4 text-white shrink-0 ml-auto" />}
+                          </button>
+                        );
+                      })
+                    : null}
+                </div>
+
+                {/* 选项：添加工作区...（使用加号图标，无额外分割线） */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsWorkspaceDropdownOpen(false);
+                    onOpenFolderPicker?.();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-zinc-200 hover:bg-[#2f2f35] hover:text-white transition-colors select-none"
+                >
+                  <PlusIcon className="size-4 text-zinc-300 shrink-0" />
+                  <span className="truncate">添加工作区...</span>
+                </button>
               </div>
+            )}
+          </div>
 
-              {/* 选项：添加工作区...（使用加号图标，无额外分割线） */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsWorkspaceDropdownOpen(false);
-                  onOpenFolderPicker?.();
-                }}
-                className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] text-zinc-200 hover:bg-[#2f2f35] hover:text-white transition-colors select-none"
-              >
-                <PlusIcon className="size-4 text-zinc-300 shrink-0" />
-                <span className="truncate">添加工作区...</span>
-              </button>
+          {/* 任务 Todo 列表平行和工作区选择器同行对齐展示 */}
+          {todoActivity ? (
+            <div ref={todoCardRef} className="min-w-0 flex-1">
+              <TodoCard activity={todoActivity} />
             </div>
-          )}
-          </div>
+          ) : null}
         </div>
-
-        {todoActivity ? (
-          <div ref={todoCardRef} className="mb-2 min-w-0">
-            <TodoCard activity={todoActivity} />
-          </div>
-        ) : null}
 
         <PromptInputProvider>
           {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
