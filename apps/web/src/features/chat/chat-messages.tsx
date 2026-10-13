@@ -201,6 +201,9 @@ export function buildTurnProcessTimeline(
       ) {
         return true;
       }
+      if (Boolean(item.reasoning) && msgIdx < turnMessages.length - 1) {
+        return true;
+      }
       return false;
     };
 

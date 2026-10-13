@@ -148,7 +148,7 @@ export function hasLookaheadSignalForMessage(
 ): boolean {
   if (collectProcessMessageIds(queue).has(messageId)) return true;
   if (hasTerminalEvent(queue)) return true;
-  if (queuedTextLengthForMessage(queue, messageId) >= 120) return true;
+  if (queuedTextLengthForMessage(queue, messageId) >= 45) return true;
   return false;
 }
 

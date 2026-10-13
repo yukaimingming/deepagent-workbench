@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MessageResponse } from "../../components/ai-elements/message.js";
 import {
   BrainCircuitIcon,
@@ -266,9 +266,20 @@ export function ProcessActivityGroup({
   }
   const expanded = manualExpanded ?? !settled;
   const [now, setNow] = useState(() => Date.now());
-  const startedAt = items.length > 0
-    ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
-    : runStartedAt ?? now;
+  // 保持起始时间单调固定，从本轮运行开始（runStartedAt 或组件初始挂载时间）持续平滑计时，
+  // 绝不能在第一个思考或工具项加入时把起始时间向后推移导致计时重置为 0。
+  const initialMountTimeRef = useRef<number>(runStartedAt ?? now);
+  const lastRunStartedAtRef = useRef(runStartedAt);
+  if (runStartedAt !== undefined && runStartedAt !== lastRunStartedAtRef.current) {
+    lastRunStartedAtRef.current = runStartedAt;
+    initialMountTimeRef.current = runStartedAt;
+  }
+  const timeCandidates = [
+    initialMountTimeRef.current,
+    ...(runStartedAt ? [runStartedAt] : []),
+    ...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt),
+  ].filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
+  const startedAt = timeCandidates.length > 0 ? Math.min(...timeCandidates) : (runStartedAt ?? now);
   const liveElapsed = Math.max(durationMs ?? 0, now - startedAt);
   const [frozenElapsed, setFrozenElapsed] = useState<number | undefined>(undefined);
   if (settled && frozenElapsed === undefined) {

@@ -96,6 +96,19 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain("模型返回的原始推理内容。");
   });
 
+  it("首个思考出现时继承已有的 runStartedAt 计时，绝不重置为0秒", () => {
+    const runStart = Date.now() - 5_000;
+    const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
+      items: [{ ...reasoningItem, streaming: true, startedAt: Date.now() }],
+      startedAt: runStart,
+      finalAnswerComplete: false,
+      finalAnswerStreaming: false,
+      runCompleted: false,
+    }));
+
+    expect(html).toContain("正在分析，用时 0分5秒");
+  });
+
   it("工具、子 Agent 或过程消息仍活动时阻止最终正文抢先出现", () => {
     const activeSubagent = {
       id: "subagent:1",

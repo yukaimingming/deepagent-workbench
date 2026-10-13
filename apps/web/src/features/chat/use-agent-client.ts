@@ -251,7 +251,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
                   lookaheadWaitingRef.current.delete(threadId);
                   playbackWakeRef.current.delete(threadId);
                   resolve();
-                }, 180);
+                }, 1200);
                 playbackWakeRef.current.set(threadId, () => {
                   clearTimeout(timer);
                   lookaheadWaitingRef.current.delete(threadId);
