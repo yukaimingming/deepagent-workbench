@@ -190,6 +190,9 @@ export function ChatInput({
   // Token 用量悬浮面板
   const [isUsageHover, setIsUsageHover] = useState(false);
 
+  // 待办任务列表展开状态
+  const [isTodoExpanded, setIsTodoExpanded] = useState(false);
+
   // 工作区下拉选择状态
   const [isWorkspaceDropdownOpen, setIsWorkspaceDropdownOpen] = useState(false);
   const workspaceDropdownRef = useRef<HTMLDivElement>(null);
@@ -219,13 +222,11 @@ export function ChatInput({
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node;
-      const clickedTodoCard = todoCardRef.current?.contains(target) === true;
-      if (
-        workspaceDropdownRef.current &&
-        !workspaceDropdownRef.current.contains(target) &&
-        !clickedTodoCard
-      ) {
+      if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(target)) {
         setIsWorkspaceDropdownOpen(false);
+      }
+      if (todoCardRef.current && !todoCardRef.current.contains(target)) {
+        setIsTodoExpanded(false);
       }
       if (modelDropdownRef.current && !modelDropdownRef.current.contains(target)) {
         setIsModelDropdownOpen(false);
@@ -291,6 +292,7 @@ export function ChatInput({
               data-testid="workspace-mode-selector"
               onClick={() => {
                 setIsWorkspaceDropdownOpen((v) => !v);
+                setIsTodoExpanded(false);
                 setIsModelDropdownOpen(false);
                 setIsEffortDropdownOpen(false);
               }}
@@ -384,10 +386,20 @@ export function ChatInput({
             )}
           </div>
 
-          {/* 任务 Todo 列表平行和工作区选择器同行对齐展示 */}
+          {/* 任务 Todo 列表平行在工作区选择器右侧独立展示（展开详情为绝对定位浮层，互不影响） */}
           {todoActivity ? (
-            <div ref={todoCardRef} className="min-w-0 flex-1">
-              <TodoCard activity={todoActivity} />
+            <div ref={todoCardRef} className="relative flex w-fit shrink-0 items-center">
+              <TodoCard
+                activity={todoActivity}
+                isOpen={isTodoExpanded}
+                onToggleOpen={() => {
+                  setIsTodoExpanded((v) => !v);
+                  setIsWorkspaceDropdownOpen(false);
+                  setIsModelDropdownOpen(false);
+                  setIsEffortDropdownOpen(false);
+                }}
+                onClose={() => setIsTodoExpanded(false)}
+              />
             </div>
           ) : null}
         </div>
