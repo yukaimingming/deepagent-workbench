@@ -253,9 +253,18 @@ export function ProcessActivityGroup({
     hasStreamingMessage ||
     (isActive && !finalAnswerStreaming && !finalAnswerComplete && !runCompleted);
   const settled = !analysisBusy && items.length > 0;
-  // 最上方时间线默认始终保持展开，不再自动收缩，仅由用户手动点击标题栏切换。
+  // 展开与收缩策略：
+  // 1. 过程进行中（思考、中间过程说明、工具调用等执行中，!settled）默认保持展开；
+  // 2. 总体工具和过程详细全部输出完毕、要正式输出正文（settled 为 true）时自动总体收缩；
+  // 3. 用户手动点击标题栏可随时展开/收起查看详情；
+  // 4. 当状态从进行中过渡到正式正文时重置手动状态，确保自然收缩。
   const [manualExpanded, setManualExpanded] = useState<boolean | undefined>(undefined);
-  const expanded = manualExpanded ?? true;
+  const [lastSettled, setLastSettled] = useState(settled);
+  if (settled !== lastSettled) {
+    setLastSettled(settled);
+    setManualExpanded(undefined);
+  }
+  const expanded = manualExpanded ?? !settled;
   const [now, setNow] = useState(() => Date.now());
   const startedAt = items.length > 0
     ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))

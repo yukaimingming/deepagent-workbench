@@ -55,7 +55,7 @@ describe("工具后的中间说明", () => {
     },
   ];
 
-  it("工具完成后最终总结用 Markdown 显示，分析总线停止计时并保持展开", () => {
+  it("工具完成后最终总结用 Markdown 显示，分析总线停止计时并收缩", () => {
     const summary = "检查完成，入口是 `src/index.ts`。";
     const html = renderToStaticMarkup(createElement(ChatMessages, {
       messages: [
@@ -75,15 +75,14 @@ describe("工具后的中间说明", () => {
       runSnapshot: runningSnapshot("running"),
     }));
 
-    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("已完成分析");
     expect(html).not.toContain("正在分析");
-    expect(html).toContain("查看了目录");
     expect(html).toContain("<code");
     expect(html.split("src/index.ts").length - 1).toBe(1);
   });
 
-  it("更早的工具后说明留在时间线内展开显示，最终总结单独用 Markdown 显示", () => {
+  it("更早的工具后说明留在时间线内，最终总结输出时时间线收缩", () => {
     const finalText = "检查完成，入口是 `src/index.ts`。";
     const html = renderToStaticMarkup(createElement(ChatMessages, {
       messages: [
@@ -99,9 +98,8 @@ describe("工具后的中间说明", () => {
       runSnapshot: runningSnapshot("completed"),
     }));
 
-    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("已完成分析");
-    expect(html).toContain(mid);
     expect(html).toContain("<code");
     expect(html.split("src/index.ts").length - 1).toBe(1);
   });

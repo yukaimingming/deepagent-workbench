@@ -49,7 +49,7 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain('aria-expanded="true"');
   });
 
-  it("正文流式结束后立即汇总为完成，同时顶部时间线默认保持展开", () => {
+  it("正文流式结束后立即汇总为完成，同时顶部时间线自动收缩", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
       finalAnswerComplete: true,
@@ -61,11 +61,10 @@ describe("ProcessActivityGroup 状态展示", () => {
     expect(html).toContain("已完成分析，用时 1分23秒");
     expect(html).not.toContain("正在分析");
     expect(html).not.toContain("正在思考");
-    expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain("模型返回的原始推理内容。");
+    expect(html).toContain('aria-expanded="false"');
   });
 
-  it("工具和思考输出完后停止计时，顶部时间线默认保持展开", () => {
+  it("工具和思考输出完后停止计时，正式输出正文时时间线自动收缩", () => {
     const html = renderToStaticMarkup(createElement(ProcessActivityGroup, {
       items: [reasoningItem],
       finalAnswerComplete: false,
@@ -74,10 +73,9 @@ describe("ProcessActivityGroup 状态展示", () => {
       durationMs: 83_000,
     }));
 
-    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("已完成分析，用时 1分23秒");
     expect(html).not.toContain("正在分析");
-    expect(html).toContain("模型返回的原始推理内容。");
   });
 
   it("思考还在输出时计时继续，思考明细本身保持折叠", () => {

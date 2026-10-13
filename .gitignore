@@ -24,8 +24,9 @@ workspace/
 npm-debug.log*
 pnpm-debug.log*
 
-# 测试覆盖率
+# 测试覆盖率与测试产物
 coverage/
+test-results/
 
 # 编辑器
 .vscode/*
