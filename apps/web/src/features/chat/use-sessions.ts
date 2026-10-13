@@ -8,7 +8,7 @@
  * - 自动根据首条用户消息生成对话标题
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientState } from "./client-reducer.js";
 
 const SESSIONS_STORAGE_KEY = "deepagent_sessions_list_v2";
@@ -29,6 +29,12 @@ export interface FolderGroup {
   folderPath: string;
   folderName: string;
   sessions: SessionSummary[];
+}
+
+export interface RemoteWorkbenchIndex {
+  sessions: SessionSummary[];
+  customWorkspaces: string[];
+  activeSessionId: string;
 }
 
 /** 规范化路径用于对比。 */
@@ -59,6 +65,7 @@ function createNewSessionSummary(id: string, workspaceRoot: string = ""): Sessio
 }
 
 export function useSessions(initialThreadId: string, defaultWorkspace: string = "") {
+  const remoteSessionStates = useRef(new Map<string, ClientState>());
   // 自定义添加的工作区文件夹路径列表
   const [customWorkspaces, setCustomWorkspaces] = useState<string[]>(() => {
     try {
@@ -156,6 +163,8 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
 
   /** 读取指定会话的完整状态。 */
   const loadSessionState = useCallback((id: string): ClientState | null => {
+    const remoteState = remoteSessionStates.current.get(id);
+    if (remoteState) return remoteState;
     try {
       const raw = localStorage.getItem(`${SESSION_STATE_PREFIX}${id}`);
       if (raw) {
@@ -165,6 +174,27 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
       // 异常时返回 null
     }
     return null;
+  }, []);
+
+  const cacheRemoteSessionState = useCallback((id: string, state: ClientState) => {
+    remoteSessionStates.current.set(id, state);
+    try {
+      localStorage.setItem(`${SESSION_STATE_PREFIX}${id}`, JSON.stringify(state));
+    } catch {
+      // 服务端仍保留会话；本地缓存空间不足时忽略。
+    }
+  }, []);
+
+  const restoreRemoteIndex = useCallback((index: RemoteWorkbenchIndex) => {
+    if (index.sessions.length > 0) setSessions(index.sessions);
+    if (index.customWorkspaces.length > 0 || index.sessions.length > 0) {
+      setCustomWorkspaces(index.customWorkspaces);
+    }
+    if (index.sessions.some((session) => session.id === index.activeSessionId)) {
+      setActiveSessionId(index.activeSessionId);
+    } else if (index.sessions[0]) {
+      setActiveSessionId(index.sessions[0].id);
+    }
   }, []);
 
   /** 保存指定会话的完整状态并同步会话摘要。 */
@@ -238,12 +268,22 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
 
   /** 删除会话。 */
   const removeSession = useCallback((id: string) => {
+    remoteSessionStates.current.delete(id);
     try {
       localStorage.removeItem(`${SESSION_STATE_PREFIX}${id}`);
     } catch {
       // 异常
     }
     setSessions((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const clearSessionState = useCallback((id: string) => {
+    remoteSessionStates.current.delete(id);
+    try {
+      localStorage.removeItem(`${SESSION_STATE_PREFIX}${id}`);
+    } catch {
+      // 服务端状态仍会由调用方清理。
+    }
   }, []);
 
   /** 重命名会话。 */
@@ -350,8 +390,11 @@ export function useSessions(initialThreadId: string, defaultWorkspace: string = 
     setActiveSessionId,
     createSession,
     removeSession,
+    clearSessionState,
     renameSession,
     loadSessionState,
+    cacheRemoteSessionState,
+    restoreRemoteIndex,
     saveSessionState,
     customWorkspaces,
     addWorkspace,

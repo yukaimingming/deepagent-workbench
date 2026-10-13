@@ -33,7 +33,6 @@ import { hasActiveProcess, ProcessActivityGroup, type ProcessTimelineItem } from
 import { DiffCard, type FileChangeSummary } from "./diff-card.js";
 import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
 import { ApprovalCard } from "./approval-card.js";
-import { TodoCard } from "./todo-card.js";
 import {
   CopyIcon,
   CheckIcon,
@@ -122,7 +121,15 @@ export function buildTurnProcessTimeline(
     items.sort((a, b) => {
       const at = a.kind === "assistant" ? a.startedAt : a.activity.startedAt;
       const bt = b.kind === "assistant" ? b.startedAt : b.activity.startedAt;
-      return at - bt || (a.kind === "assistant" ? -1 : 1);
+      if (at !== bt) return at - bt;
+      // 同一模型节点会把 reasoning 占位和正文映射到同一条消息、同一时间戳。
+      // 先显示推理，再显示模型中间文本，最后显示同时刻工具活动；比较器必须
+      // 对同类项目返回 0，避免不稳定排序让内容反复换位或落到正文区。
+      const rank = (item: ProcessTimelineItem): number => {
+        if (item.kind === "activity") return 2;
+        return item.section === "reasoning" ? 0 : 1;
+      };
+      return rank(a) - rank(b);
     });
     byFinalMessage.set(finalMessage.id, items);
   }
@@ -190,8 +197,6 @@ export function ChatMessages({
   decisions,
   onQuickPrompt,
 }: ChatMessagesProps) {
-  // 待办计划任务
-  const _todoActivity = activities.find((activity) => activity.kind === "todo");
   // 人工审批活动
   const approvals = activities.filter((activity) => activity.kind === "approval");
   // 工具调用卡片
@@ -302,16 +307,12 @@ export function ChatMessages({
               );
             })()}
 
-            <div className="grid w-full max-w-xl grid-cols-1 gap-2 text-left sm:grid-cols-2">
+            <div className="grid w-full max-w-md grid-cols-1 gap-2 text-left sm:grid-cols-2">
               {[
                 { label: "查看工作区文件", prompt: "查看当前工作区目录下的所有文件并说明用途。" },
-                { label: "分析项目结构", prompt: "分析当前工作区的技术栈、入口文件、主要模块和模块之间的调用关系，只做分析，先不要修改文件。" },
-                { label: "搜索代码与配置", prompt: "在当前工作区搜索与我指定功能相关的代码和配置，列出文件路径、关键实现和调用关系。" },
-                { label: "规划待办任务", prompt: "根据当前工作区的现状规划实现目标所需的待办清单，拆分为可执行步骤，先不要执行。" },
-                { label: "实现功能需求", prompt: "先检查当前工作区相关代码和项目约定，再按需求实现功能，保留现有行为并总结改动。" },
-                { label: "排查并修复问题", prompt: "检查当前工作区中与问题相关的实现，定位原因，做最小范围修复，并说明验证结果。" },
-                { label: "创建或更新文档", prompt: "阅读当前工作区的实现和现有文档，创建或更新中文 Markdown 使用说明，确保内容与代码一致。" },
-                { label: "检查环境与 Git 状态", prompt: "检查当前工作区的运行环境和 Git 工作区状态，汇总 Node.js、包管理器、当前分支和未提交改动；不要修改文件。" },
+                { label: "规划待办开发任务", prompt: "为当前工作区规划一份构建 TypeScript CLI 工具的待办清单并开始执行。" },
+                { label: "创建项目说明文档", prompt: "在工作区创建 README.md 文件，写入工作台的功能特性与使用指南。" },
+                { label: "检查系统运行环境", prompt: "执行 Shell 命令检查当前系统的 Node.js 版本和操作系统平台。" },
               ].map((item) => (
                 <button
                   key={item.label}
@@ -483,41 +484,31 @@ export function ChatMessages({
                 (a, b) => a.startedAt - b.startedAt,
               );
 
-              const currentTodoActivity = activities.find((activity) => {
-                if (activity.kind !== "todo") return false;
-                if (currentRunId && activity.runId) {
-                  return activity.runId === currentRunId;
-                }
-                return isLast && (!currentRunId || !activity.runId);
-              });
-
               const processItems = turnTimelineByMessage.get(message.id) ?? [];
               const messageIsInTimeline = timelineOwnedMessageIds.has(message.id);
               if (messageIsInTimeline && processItems.length === 0) return null;
-              // 严格互斥：一旦正文开始打字或思考收到结束信号，思考流锁定为已完成
+              const timelineIsActive = isLast && (
+                runSnapshot?.status === "connecting" ||
+                runSnapshot?.status === "running" ||
+                runSnapshot?.status === "waiting_approval"
+              );
+              // 思考还在增量到达时先不画正文，避免两段抢同一条消息。
+              // 工具和子任务不再挡住正文：增量一到就用流式组件显示，不再等整段过程结束。
               const isReasoningStreaming = message.reasoningStreaming === true;
-              // 最终正文要等整条过程时间线上的推理、工具和子 Agent 活动结束后再开始。
               const hasActiveTimelineWork = hasActiveProcess(processItems, currentToolActivities);
-
-              // 严格时序铁律：思考必须完全结束（!isReasoningStreaming）且无正在运行工具，才允许流式输出正式内容
               const shouldShowMessageContent =
-                !messageIsInTimeline && !isReasoningStreaming && !hasActiveTimelineWork && (message.content.length > 0 || message.streaming);
+                !messageIsInTimeline && !isReasoningStreaming && (message.content.length > 0 || message.streaming);
 
               return (
                 <div key={message.id} className="flex flex-col w-full text-zinc-100 space-y-3">
-                  {/* 1. 待办任务队列卡片（Queue / Todo）：仅在当前轮次调用了 write_todos 时展示 */}
-                  {currentTodoActivity ? (
-                    <div className="w-full my-1">
-                      <TodoCard activity={currentTodoActivity} />
-                    </div>
-                  ) : null}
-
                   {/* 3. 工具调用提示：完全去掉复杂卡片，按工具名归一化展示干净的单行提示 */}
                   <ProcessActivityGroup
-                    key={`${message.id}-${shouldShowMessageContent && !message.streaming && message.content.trim() ? "complete" : "process"}`}
+                    key={message.id}
                     items={processItems}
-                    finalAnswerComplete={shouldShowMessageContent && !message.streaming && message.content.trim().length > 0}
-                    finalAnswerStreaming={shouldShowMessageContent && message.streaming}
+                    isActive={timelineIsActive}
+                    startedAt={runSnapshot?.startedAt}
+                    finalAnswerComplete={shouldShowMessageContent && !message.streaming && message.content.trim().length > 0 && !hasActiveTimelineWork}
+                    finalAnswerStreaming={shouldShowMessageContent && message.streaming && !hasActiveTimelineWork}
                     durationMs={message.runDurationMs ?? (message.runId === runSnapshot?.runId ? runSnapshot?.durationMs : undefined)}
                     runCompleted={message.runId === runSnapshot?.runId ? runSnapshot?.status === "completed" : message.runDurationMs !== undefined}
                   />
@@ -544,7 +535,7 @@ export function ChatMessages({
                           </span>
                         ) : message.content.length > 0 ? (
                           <div className={cn("w-full text-zinc-100", message.streaming && "streaming-caret")}>
-                            <MessageResponse mode={message.streaming ? "streaming" : "static"}>
+                            <MessageResponse mode="static" isAnimating={message.streaming}>
                               {message.content}
                             </MessageResponse>
                           </div>

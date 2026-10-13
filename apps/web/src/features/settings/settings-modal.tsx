@@ -10,13 +10,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  PROVIDER_TYPES,
   REASONING_EFFORTS,
   isTwoTierModel,
   type ProviderType,
   type PublicProvider,
 } from "@deepagent/shared";
 import { Modal } from "../../components/modal.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.js";
 import type { ModelListOutcome, ProviderDraft, TestOutcome } from "./use-provider-settings.js";
 import {
   PlusIcon,
@@ -30,11 +36,14 @@ import {
 import { cn } from "../../lib/utils.js";
 
 const TYPE_LABEL: Record<ProviderType, string> = {
-  stepfun: "StepFun 阶跃星辰",
-  openai: "OpenAI 官方",
-  anthropic: "Anthropic Claude",
-  "openai-compatible": "OpenAI 兼容协议",
+  stepfun: "StepFun（OpenAI 兼容）",
+  openai: "OpenAI 官方协议",
+  anthropic: "Anthropic 原生协议",
+  "openai-compatible": "OpenAI 兼容协议（自定义厂商）",
 };
+
+/** 新增配置仅提供 OpenAI 协议及兼容实现；保留已有 Anthropic 配置。 */
+const CONFIGURABLE_PROTOCOL_TYPES: ProviderType[] = ["openai", "stepfun", "openai-compatible"];
 
 interface SettingsModalProps {
   open: boolean;
@@ -102,6 +111,8 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
   // 外观上拉菜单状态
   const [isThemeOpen, setIsThemeOpen] = useState(false);
   const themeDropdownRef = useRef<HTMLDivElement>(null);
+  /** 上次自动获取模型列表的厂商 + Base URL，用于检测变更并防抖自动拉取。 */
+  const lastAutoFetchRef = useRef<{ id: string; baseUrl: string } | null>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -168,6 +179,11 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
     if (result.ok) {
       setNotice(isEditing ? "配置已成功更新" : "新厂商配置已成功保存");
       setDraft({ ...draft, apiKey: "" });
+      // Key/配置变更后自动刷新一次模型列表（AGENTS.md 9.2：填写 Base URL
+      // 和 Key 后在可安全获取时自动刷新）。失败不阻断保存流程。
+      if (draft.id) {
+        void handleFetchModels();
+      }
     } else {
       setError(result.error ?? "保存失败");
     }
@@ -201,6 +217,28 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
     });
     setNotice(`成功获取到 ${result.models.length} 个模型并全部导入列表`);
   };
+
+  // Base URL 变更后防抖自动获取模型列表：仅对已保存厂商生效（服务端用
+  // 已存密钥调用其 /models 接口）；首次渲染只记录基线，不触发请求。
+  useEffect(() => {
+    const providerId = draft?.id;
+    if (!providerId) return;
+    const baseUrl = draft.baseUrl.trim();
+    if (!/^https?:\/\//i.test(baseUrl)) return;
+    const last = lastAutoFetchRef.current;
+    if (!last) {
+      lastAutoFetchRef.current = { id: providerId, baseUrl };
+      return;
+    }
+    if (last.id === providerId && last.baseUrl === baseUrl) return;
+    const timer = setTimeout(() => {
+      lastAutoFetchRef.current = { id: providerId, baseUrl };
+      void handleFetchModels();
+    }, 1200);
+    return () => clearTimeout(timer);
+    // handleFetchModels 闭包里的 draft 随渲染更新，这里只依赖触发条件。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id, draft?.baseUrl]);
 
   const handleAddModel = async () => {
     const trimmed = manualModel.trim();
@@ -313,7 +351,7 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
         {/* 预设快捷模板 */}
         <div className="pt-2 border-t border-zinc-800/60 space-y-1">
           <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">快速模板</p>
-          {PROVIDER_TYPES.map((type) => (
+          {CONFIGURABLE_PROTOCOL_TYPES.map((type) => (
             <button
               key={type}
               type="button"
@@ -444,25 +482,34 @@ function SettingsForm(props: Omit<SettingsModalProps, "open" | "onClose" | "load
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-[11.5px] text-zinc-400">协议类型</span>
-            <select
+            <span className="mb-1 block text-[11.5px] text-zinc-400">API 协议</span>
+            <Select
               value={draft.type}
-              onChange={(e) => {
-                const type = e.target.value as ProviderType;
+              onValueChange={(value) => {
+                const type = value as ProviderType;
                 setDraft({
                   ...draft,
                   type,
                   baseUrl: props.draftFor(type, draft.label).baseUrl,
                 });
               }}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-900/90 px-2.5 py-1.5 text-[12.5px] text-zinc-100 outline-none focus:border-zinc-600"
             >
-              {PROVIDER_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {TYPE_LABEL[type]}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-[31px] w-full rounded-md border-zinc-800 bg-zinc-900/90 px-2.5 text-[12.5px] text-zinc-100 shadow-none hover:border-zinc-700 focus-visible:border-zinc-600 focus-visible:ring-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                {CONFIGURABLE_PROTOCOL_TYPES.map((type) => (
+                  <SelectItem key={type} value={type} className="text-[12.5px] focus:bg-zinc-800 focus:text-white">
+                    {TYPE_LABEL[type]}
+                  </SelectItem>
+                ))}
+                {draft.type === "anthropic" && (
+                  <SelectItem value="anthropic" className="text-[12.5px] focus:bg-zinc-800 focus:text-white">
+                    {TYPE_LABEL.anthropic}（已有配置）
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </label>
         </div>
 

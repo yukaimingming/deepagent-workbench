@@ -246,7 +246,7 @@ export type ReasoningContentProps = ComponentProps<
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => {
     const { isStreaming } = useReasoning();
-    const content = typeof children === "string" ? children.trim() : "";
+    const content = typeof children === "string" ? children : "";
     return (
       <CollapsibleContent
         className={cn(

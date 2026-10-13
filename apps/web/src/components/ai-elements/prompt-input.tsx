@@ -483,7 +483,7 @@ export const PromptInputActionAddScreenshot = ({
 
 export interface PromptInputMessage {
   text: string;
-  files: FileUIPart[];
+  files: Array<FileUIPart & { id: string }>;
 }
 
 export type PromptInputProps = Omit<
@@ -861,8 +861,8 @@ export const PromptInput = ({
 
       try {
         // Convert blob URLs to data URLs asynchronously
-        const convertedFiles: FileUIPart[] = await Promise.all(
-          files.map(async ({ id: _id, ...item }) => {
+        const convertedFiles: Array<FileUIPart & { id: string }> = await Promise.all(
+          files.map(async (item) => {
             if (item.url?.startsWith("blob:")) {
               const dataUrl = await convertBlobUrlToDataUrl(item.url);
               // If conversion failed, keep the original blob URL

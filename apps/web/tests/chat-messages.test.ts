@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { Activity } from "@deepagent/shared";
+import { ChatMessages } from "../src/features/chat/chat-messages.js";
 import {
       buildTurnProcessTimeline,
       findPromotedMessageId,
@@ -10,6 +13,22 @@ import type { ChatMessage } from "../src/features/chat/chat-types.js";
 function assistant(id: string, runId: string, content: string): ChatMessage {
   return { id, runId, role: "assistant", content, streaming: false };
 }
+
+describe("空状态建议提示词", () => {
+  it("使用 67d917f 的四条建议", () => {
+    const html = renderToStaticMarkup(createElement(ChatMessages, {
+      messages: [],
+      activities: [],
+      error: null,
+    }));
+    expect(html).toContain("查看工作区文件");
+    expect(html).toContain("规划待办开发任务");
+    expect(html).toContain("创建项目说明文档");
+    expect(html).toContain("检查系统运行环境");
+    expect(html).not.toContain("分析项目结构");
+    expect(html).not.toContain("检查环境与 Git 状态");
+  });
+});
 
 describe("findPromotedMessageId", () => {
   it("只检查最新运行，避免旧轮次的自然答复阻止审批后的总结提升", () => {

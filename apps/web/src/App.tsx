@@ -11,18 +11,25 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type Activity,
   availableEffortsForModel,
   resolveEffortForModel,
+  DEFAULT_PERMISSION_MODE,
+  PERMISSION_MODES,
+  type PermissionMode,
   type ReasoningEffort,
 } from "@deepagent/shared";
 import { useAgentClient } from "./features/chat/use-agent-client.js";
 import { ChatMessages } from "./features/chat/chat-messages.js";
+import type { ClientState } from "./features/chat/client-reducer.js";
 import { ChatInput } from "./features/chat/chat-input.js";
+import type { ChatAttachment } from "./features/chat/chat-attachments.js";
 import { WorkspaceSidebar } from "./features/chat/workspace-sidebar.js";
+import { ApprovalCard } from "./features/chat/approval-card.js";
 import { SettingsModal } from "./features/settings/settings-modal.js";
 import { useProviderSettings } from "./features/settings/use-provider-settings.js";
 import { useTheme } from "./features/settings/use-theme.js";
-import { useSessions, normalizePath } from "./features/chat/use-sessions.js";
+import { useSessions, normalizePath, type SessionSummary } from "./features/chat/use-sessions.js";
 import { FolderPickerModal } from "./features/chat/folder-picker-modal.js";
 import { PanelLeftIcon, AlertCircleIcon } from "lucide-react";
 
@@ -48,9 +55,17 @@ export function App() {
     disposeThread,
     loadState,
     setDecision,
-    restoreCheckpoint,
     rollbackBeforeMessage,
+    clearThread,
   } = useAgentClient(AGENT_URL);
+
+  const latestTodoActivity = useMemo<Activity | null>(() => {
+    const todos = state.activities.filter((activity) => activity.kind === "todo");
+    return todos.reduce<Activity | null>(
+      (latest, activity) => !latest || activity.startedAt >= latest.startedAt ? activity : latest,
+      null,
+    );
+  }, [state.activities]);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -108,11 +123,15 @@ export function App() {
     sessions,
     groupedSessions,
     removeSession,
+    clearSessionState,
     saveSessionState,
     customWorkspaces,
     addWorkspace,
     removeWorkspace,
+    cacheRemoteSessionState,
+    restoreRemoteIndex,
   } = sessionsManager;
+  const [workbenchReady, setWorkbenchReady] = useState(false);
 
   // 文件夹选择器弹窗状态
   const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
@@ -123,6 +142,81 @@ export function App() {
   useEffect(() => {
     sessionsRef.current = sessionsManager.sessions;
   }, [sessionsManager.sessions]);
+
+  // 服务端以工作目录为边界保存工作台数据，因此改用另一个前端端口后仍可恢复。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/workbench");
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          workbench: {
+            sessions: SessionSummary[];
+            customWorkspaces: string[];
+            activeSessionId: string;
+            currentWorkspace: string | null;
+          } | null;
+        };
+        if (cancelled) return;
+        const savedIndex = payload.workbench;
+        if (savedIndex?.sessions.length) {
+          restoreRemoteIndex(savedIndex);
+          setWorkspaceRoot(savedIndex.currentWorkspace);
+          const activeId = savedIndex.sessions.some((session) => session.id === savedIndex.activeSessionId)
+            ? savedIndex.activeSessionId
+            : savedIndex.sessions[0]!.id;
+          const stateResponse = await fetch(`/api/workbench/sessions/${encodeURIComponent(activeId)}`);
+          if (cancelled) return;
+          if (stateResponse.ok) {
+            const savedState = (await stateResponse.json() as { state?: ClientState }).state;
+            if (savedState) {
+              cacheRemoteSessionState(activeId, savedState);
+              loadState(savedState);
+            } else {
+              newThread(activeId);
+            }
+          } else {
+            newThread(activeId);
+          }
+        } else {
+          // 旧版数据按端口保存在浏览器里；首次迁移到本机服务端。
+          for (const session of sessionsManager.sessions) {
+            const saved = sessionsManager.loadSessionState(session.id);
+            if (saved) {
+              await fetch(`/api/workbench/sessions/${encodeURIComponent(session.id)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(saved),
+              });
+            }
+          }
+        }
+      } catch {
+        // 后端暂不可用时仍可使用当前浏览器中已有的本地会话。
+      } finally {
+        if (!cancelled) setWorkbenchReady(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  // 初始化只运行一次，避免页面状态变化时重放启动恢复流程。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!workbenchReady) return;
+    void fetch("/api/workbench", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: 1,
+        sessions: sessionsManager.sessions,
+        customWorkspaces: sessionsManager.customWorkspaces,
+        activeSessionId: state.threadId,
+        currentWorkspace: workspaceRoot,
+      }),
+    }).catch(() => undefined);
+  }, [workbenchReady, sessionsManager.sessions, sessionsManager.customWorkspaces, state.threadId, workspaceRoot]);
 
   /**
    * 自动保存：对所有会话（含正在后台执行的会话）做防抖持久化。
@@ -138,12 +232,34 @@ export function App() {
           sessionsRef.current.find((session) => session.id === threadId)?.workspaceRoot ??
           (workspaceRoot ?? "");
         saveSessionState(threadId, threadState, sessionWorkspace);
+        void fetch(`/api/workbench/sessions/${encodeURIComponent(threadId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(threadState),
+        }).catch(() => undefined);
       }
-    }, 200);
+    }, 800);
     return () => clearTimeout(timer);
-  }, [allStates, workspaceRoot, saveSessionState]);
+  }, [allStates, workspaceRoot, saveSessionState, workbenchReady]);
 
   const currentModelId = settings.currentModelId;
+
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    try {
+      const saved = localStorage.getItem("deepagent_permission_mode");
+      return PERMISSION_MODES.find((mode) => mode === saved) ?? DEFAULT_PERMISSION_MODE;
+    } catch {
+      return DEFAULT_PERMISSION_MODE;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("deepagent_permission_mode", permissionMode);
+    } catch {
+      // 浏览器禁用本地存储时，权限模式仍在当前页面会话内生效。
+    }
+  }, [permissionMode]);
 
   const effortResolution = useMemo(() => {
     if (!currentModelId) {
@@ -154,11 +270,10 @@ export function App() {
 
   const reasoningUnsupported = settings.activeProvider?.reasoning?.unsupported === true;
 
-  useEffect(() => {
-    if (effortResolution.fallbackApplied && effortResolution.effort !== settings.effort) {
-      settings.setEffort(effortResolution.effort);
-    }
-  }, [effortResolution, settings]);
+  // 注意：这里刻意不把降级后的档位回写到 settings.effort——
+  // 静默回写会让「已降级」提示永远无法出现（AGENTS.md 第 8 节要求
+  // 对不支持模型的降级必须显示说明）。settings.effort 保留用户的
+  // 原始请求，运行实际使用 effortResolution.effort。
 
   const allAvailableModels = useMemo(() => {
     if (settings.activeProvider?.models && settings.activeProvider.models.length > 0) {
@@ -188,15 +303,16 @@ export function App() {
 
   // 发送消息
   const handleSend = useCallback(
-    (content: string): void => {
+    (content: string, attachments: ChatAttachment[] = []): void => {
       void send(content, {
         providerId: settings.activeProviderId ?? undefined,
         modelId: currentModelId ?? undefined,
         effort: effortResolution.effort,
         workspaceRoot: workspaceRoot ?? undefined,
-      });
+        permissionMode,
+      }, attachments);
     },
-    [send, settings.activeProviderId, currentModelId, effortResolution.effort, workspaceRoot],
+    [send, settings.activeProviderId, currentModelId, effortResolution.effort, workspaceRoot, permissionMode],
   );
 
   // 新建会话
@@ -263,7 +379,7 @@ export function App() {
   );
 
   // 切换会话
-  const handleSelectSession = (id: string) => {
+  const handleSelectSession = async (id: string) => {
     if (id === state.threadId) return;
     const sessionWorkspace = sessionsRef.current.find((s) => s.id === id)?.workspaceRoot;
     setWorkspaceRoot(sessionWorkspace ? sessionWorkspace : null);
@@ -278,7 +394,18 @@ export function App() {
     if (state.messages.length > 0 || state.activities.length > 0) {
       saveSessionState(state.threadId, state, workspaceRoot ?? "");
     }
-    const saved = sessionsManager.loadSessionState(id);
+    let saved = sessionsManager.loadSessionState(id);
+    if (!saved) {
+      try {
+        const response = await fetch(`/api/workbench/sessions/${encodeURIComponent(id)}`);
+        if (response.ok) {
+          saved = ((await response.json()) as { state?: ClientState }).state ?? null;
+          if (saved) cacheRemoteSessionState(id, saved);
+        }
+      } catch {
+        // 继续按空会话打开；已存在的本地会话不受影响。
+      }
+    }
     if (saved) {
       loadState(saved);
     } else {
@@ -302,6 +429,7 @@ export function App() {
           modelId: currentModelId ?? undefined,
           effort: effortResolution.effort,
           workspaceRoot: workspaceRoot ?? undefined,
+          permissionMode,
         });
       }, 60);
     }
@@ -313,6 +441,7 @@ export function App() {
       modelId: currentModelId ?? undefined,
       effort: effortResolution.effort,
       workspaceRoot: workspaceRoot ?? undefined,
+      permissionMode,
     });
   };
 
@@ -323,14 +452,16 @@ export function App() {
       .reverse()
       .find((message) => message.role === "user");
     if (!userMessage) return;
-    restoreCheckpoint(userMessage.id);
+    // 必须连同用户消息一起回退（与编辑重发一致）：若保留原消息再发送，
+    // handleSend 会再追加一条相同内容的用户消息，导致提示词重复显示。
+    rollbackBeforeMessage(userMessage.id);
     handleSend(userMessage.content);
   };
 
   const handleEditMessage = useCallback(
-    (messageId: string, newContent: string): void => {
+    (messageId: string, newContent: string, attachments: ChatAttachment[] = []): void => {
       rollbackBeforeMessage(messageId);
-      handleSend(newContent);
+      handleSend(newContent, attachments);
     },
     [rollbackBeforeMessage, handleSend],
   );
@@ -342,12 +473,18 @@ export function App() {
       handleSend,
       handleEditMessage,
       handleNewSession,
+      handleSubmitDecisions,
       sessionsManager,
     };
+    // handleSubmitDecisions 依赖 settings/effortResolution 等渲染期值，
+    // 每次渲染都是新引用；这里刻意只按状态键重挂载，避免钩子频繁重建。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, loadState, handleSend, handleEditMessage, handleNewSession, sessionsManager]);
 
-  const hasDecisions = Object.keys(state.pendingDecisions).length > 0;
   const pendingInterrupts = state.run.interrupts;
+  const hasDecisions =
+    pendingInterrupts.length > 0 &&
+    pendingInterrupts.every((interrupt) => Boolean(state.pendingDecisions[interrupt.id]));
 
   const currentSession = sessions.find((s) => s.id === state.threadId);
   const currentTitle = currentSession?.title || "新对话";
@@ -366,8 +503,14 @@ export function App() {
         activeSessionId={state.threadId}
         runningSessionIds={runningThreadIds}
         onSelectSession={handleSelectSession}
+        onClearSession={(id) => {
+          clearThread(id);
+          clearSessionState(id);
+          void fetch(`/api/workbench/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => undefined);
+        }}
         onRemoveSession={(id) => {
           removeSession(id);
+          void fetch(`/api/workbench/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => undefined);
           // 释放该会话的运行时（会中止其后台运行并切换到其它可用会话）。
           disposeThread(id);
         }}
@@ -421,38 +564,68 @@ export function App() {
             activities={state.activities}
             error={state.run.error}
             isRunning={isRunning}
+            runSnapshot={state.run}
             onRetry={handleRetry}
             onEditMessage={handleEditMessage}
-            onDecide={handleDecide}
-            decisions={state.pendingDecisions}
             onQuickPrompt={handleSend}
           />
 
           {/* 人工审批通知栏 */}
           {pendingInterrupts.length > 0 ? (
-            <div className="shrink-0 border-t border-border bg-card px-4 py-2.5">
-              <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4">
-                <div className="flex items-center gap-2 text-foreground text-[12.5px] font-medium">
-                  <AlertCircleIcon className="size-4 shrink-0 text-muted-foreground" />
-                  <span>
-                    需人工确认：{pendingInterrupts.length} 项操作
-                    {hasDecisions ? "（已就绪）" : ""}
-                  </span>
+            <div className="shrink-0 border-t border-border bg-card px-4 py-3">
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+                <div className="max-h-[min(32vh,20rem)] space-y-2 overflow-y-auto">
+                  {pendingInterrupts.map((interrupt) => {
+                    const activity = state.activities.find(
+                      (item) => item.kind === "approval" && item.id === `approval:${interrupt.id}`,
+                    );
+                    if (!activity) return null;
+                    const selectedDecision = state.pendingDecisions[interrupt.id]?.type;
+                    const decision =
+                      selectedDecision === "approve" || selectedDecision === "reject"
+                        ? selectedDecision
+                        : undefined;
+                    return (
+                      <ApprovalCard
+                        key={interrupt.id}
+                        activity={activity}
+                        decision={decision}
+                        onDecide={handleDecide}
+                      />
+                    );
+                  })}
                 </div>
-                <button
-                  type="button"
-                  onClick={handleSubmitDecisions}
-                  disabled={!hasDecisions || isRunning}
-                  className="rounded-md bg-foreground text-background hover:bg-foreground/90 px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40"
-                >
-                  继续执行
-                </button>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 text-foreground text-[12.5px] font-medium">
+                    <AlertCircleIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span>
+                      需人工确认：{pendingInterrupts.length} 项操作
+                      {hasDecisions ? "（已就绪）" : ""}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSubmitDecisions}
+                    disabled={!hasDecisions || isRunning}
+                    title={
+                      isRunning
+                        ? "正在运行中"
+                        : hasDecisions
+                          ? "按已选择的决策恢复执行（未选择的将按批准处理）"
+                          : "请先在审批卡片中点击「批准」或「拒绝」"
+                    }
+                    className="rounded-md bg-foreground text-background hover:bg-foreground/90 px-3 py-1 text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    继续执行
+                  </button>
+                </div>
               </div>
             </div>
           ) : null}
 
           {/* 底部输入框（支持输入框上方对齐的工作区下拉选择、模型下拉选择与思考等级） */}
           <ChatInput
+            todoActivity={latestTodoActivity}
             onSend={handleSend}
             onStop={() => void stop()}
             isRunning={isRunning}
@@ -461,14 +634,18 @@ export function App() {
             supportedEfforts={effortResolution.supported}
             reasoningUnsupported={reasoningUnsupported}
             fallbackApplied={effortResolution.fallbackApplied}
+            requestedEffort={settings.effort}
             modelStatus={modelStatus}
             modelStatusKind={modelStatusKind}
             disabled={!canSend}
             availableModels={allAvailableModels}
             currentModel={currentModelId}
             onSelectModel={(model: string) => settings.setActiveModelId(model)}
+            permissionMode={permissionMode}
+            onPermissionModeChange={setPermissionMode}
             onOpenSettings={() => setSettingsOpen(true)}
             workspaceRoot={workspaceRoot}
+            usage={state.run.usage ?? null}
             customWorkspaces={customWorkspaces}
             onSelectWorkspace={(path) => {
               setWorkspaceRoot(path);

@@ -2,23 +2,31 @@
  * AG-UI Agent 实现。
  *
  * 继承 `AbstractAgent`，把 DeepAgent 的运行接到 AG-UI 事件流上。
- * 每个线程一个 LangGraph thread_id，用共享 checkpointer 保留会话状态，
- * 因此刷新页面后可以继续同一会话（进程重启后不保留）。
+ * 每个线程一个 LangGraph thread_id，通过本地 Markdown 检查点持久化状态，
+ * 刷新页面或重启本地服务后都可以继续同一会话。
  */
 
 import { type BaseEvent, type RunAgentInput, type ResumeEntry } from "@ag-ui/core";
 import { AbstractAgent } from "@ag-ui/client";
 import { Observable } from "rxjs";
 import type { Decision } from "langchain";
-import { MemorySaver } from "@langchain/langgraph";
+import { FileCheckpointSaver } from "../config/file-checkpoint-saver.js";
 import { ConfigStore } from "../config/store.js";
-import { createAgentBundle, type CreateAgentOptions } from "./create-agent.js";
+import {
+  createAgentBundle,
+  FileDiffRecorder,
+  type CreateAgentOptions,
+} from "./create-agent.js";
 import { describeRunError } from "./errors.js";
 import {
   DeepAgentToAguiAdapter,
   aguiMessagesToLangChain,
 } from "./agui-adapter.js";
-import type { ReasoningEffort } from "@deepagent/shared";
+import {
+  DEFAULT_PERMISSION_MODE,
+  type PermissionMode,
+  type ReasoningEffort,
+} from "@deepagent/shared";
 import { resolveEffortForModel } from "@deepagent/shared";
 import { randomUUID } from "node:crypto";
 import { resolve, sep } from "node:path";
@@ -46,11 +54,11 @@ export class DeepAgentAgui extends AbstractAgent {
   private readonly shellEnabled: boolean;
   private readonly approvalRequired: boolean;
   private readonly defaultEffort: ReasoningEffort;
-  private readonly checkpointer = new MemorySaver();
+  private readonly checkpointer: FileCheckpointSaver;
   /** threadId → 当前运行，支持取消。 */
   private readonly activeRuns = new Map<string, ThreadRun>();
 
-  constructor(config: { agentId?: string } & DeepAgentServiceOptions) {
+  constructor(config: { agentId?: string; checkpointer: FileCheckpointSaver } & DeepAgentServiceOptions) {
     super({ agentId: config.agentId ?? "deepagent" });
     this.store = config.store;
     this.workspaceRoot = resolve(config.workspaceRoot);
@@ -58,7 +66,10 @@ export class DeepAgentAgui extends AbstractAgent {
     this.shellEnabled = config.shellEnabled;
     this.approvalRequired = config.approvalRequired;
     this.defaultEffort = config.defaultEffort;
+    this.checkpointer = config.checkpointer;
   }
+
+  close(): Promise<void> { return this.checkpointer.flush(); }
 
   /** 动态更新当前活动工作区根目录。 */
   setWorkspaceRoot(newRoot: string): void {
@@ -79,16 +90,22 @@ export class DeepAgentAgui extends AbstractAgent {
       const sink = (event: BaseEvent): void => {
         observer.next(event);
       };
+      // bundle（含文件变更记录器）在 execute 里才创建，适配器创建更早；
+      // 用惰性 getter 在真正消费工具调用时才解析记录器，多会话并发各自隔离。
+      const runtime: { diffRecorder?: FileDiffRecorder } = {};
       const adapter = new DeepAgentToAguiAdapter(
         {
           input,
           newId: () => randomUUID(),
           now: () => Date.now(),
+          get diffRecorder() {
+            return runtime.diffRecorder;
+          },
         },
         sink,
       );
 
-      void this.execute(input, adapter, controller.signal)
+      void this.execute(input, adapter, controller.signal, runtime)
         .catch((error: unknown) => {
           // 底层模型/LangGraph 的原始错误信息对用户不可读，
           // 也不该把内部文档链接直接抛到界面上。
@@ -119,6 +136,7 @@ export class DeepAgentAgui extends AbstractAgent {
     input: RunAgentInput,
     adapter: DeepAgentToAguiAdapter,
     signal: AbortSignal,
+    runtime: { diffRecorder?: FileDiffRecorder },
   ): Promise<void> {
     // RUN_STARTED 必须第一个发出，即使随后立即失败：
     // AG-UI 客户端依赖它标记运行开始。
@@ -141,6 +159,7 @@ export class DeepAgentAgui extends AbstractAgent {
       modelId,
       readEffort(input) ?? this.defaultEffort,
     ).effort;
+    const permissionMode = readPermissionMode(input);
 
     // 前端左侧树选中的目录会作为 forwardedProps.workspaceRoot 传上来。
     // 必须校验它确实落在配置的工作区之内，否则前端可以借这个字段
@@ -157,10 +176,12 @@ export class DeepAgentAgui extends AbstractAgent {
         workspaceRoot,
         effort,
         shellEnabled: this.shellEnabled,
-        approvalRequired: this.approvalRequired,
+        approvalRequired: this.approvalRequired && permissionMode !== "full",
+        permissionMode,
       } satisfies CreateAgentOptions,
       this.checkpointer,
     );
+    runtime.diffRecorder = bundle.diffRecorder;
 
     const resume = input.resume ?? [];
     const isResume = resume.length > 0;
@@ -172,7 +193,12 @@ export class DeepAgentAgui extends AbstractAgent {
 
     const state = isResume
       ? DeepAgentToAguiAdapter.decisionsToCommand(resumeToDecisions(resume))
-      : { messages: aguiMessagesToLangChain(input.messages) };
+      : {
+          messages: aguiMessagesToLangChain(
+            input.messages,
+            provider.type === "stepfun" || provider.type === "openai" || provider.type === "openai-compatible",
+          ),
+        };
 
     const run = await bundle.agent.streamEvents(state, { ...config, version: "v3" as const });
 
@@ -202,6 +228,12 @@ export class DeepAgentAgui extends AbstractAgent {
       adapter.finishWithInterrupt();
       return;
     }
+    // resume 运行收尾对账：最终状态的总结文本若未通过流式事件发出，平滑补发。
+    if (isResume) {
+      const output = await run.output;
+      const finalMessages = (output as { messages?: unknown }).messages;
+      await adapter.reconcileResumeSummary(finalMessages);
+    }
     adapter.finish();
   }
 
@@ -214,6 +246,15 @@ export class DeepAgentAgui extends AbstractAgent {
     if (!active.enabled) return null;
     return active;
   }
+}
+
+/** 从本次运行参数读取审批模式；缺省或无效值采用最严格模式。 */
+export function readPermissionMode(input: RunAgentInput): PermissionMode {
+  const props = (input.forwardedProps ?? {}) as { permissionMode?: unknown };
+  if (props.permissionMode === "auto" || props.permissionMode === "full" || props.permissionMode === "ask") {
+    return props.permissionMode;
+  }
+  return DEFAULT_PERMISSION_MODE;
 }
 
 /** 把 AG-UI 的 ResumeEntry 数组转成 LangGraph 的 Decision 数组。 */

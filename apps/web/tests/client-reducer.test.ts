@@ -92,6 +92,35 @@ describe("消息流", () => {
     expect(state.messages).toHaveLength(0);
   });
 
+  it("同一运行的后续模型节点不会串入已完成消息正文", () => {
+    const state = apply([
+      { type: "startAssistant", runId: "r1", messageId: "node-1" },
+      { type: "appendAssistant", messageId: "node-1", delta: "过程阶段" },
+      { type: "endAssistant", messageId: "node-1" },
+      { type: "startAssistant", runId: "r1", messageId: "node-2" },
+      { type: "appendAssistant", messageId: "node-2", delta: "最终回答" },
+      { type: "endAssistant", messageId: "node-2" },
+    ]);
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages.map((message) => message.content)).toEqual(["过程阶段", "最终回答"]);
+    expect(state.messages[0]?.id).not.toBe(state.messages[1]?.id);
+  });
+
+  it("重复使用模型消息 ID 时为新段分配独立 ID", () => {
+    const state = apply([
+      { type: "startAssistant", runId: "r1", messageId: "reused" },
+      { type: "appendAssistant", messageId: "reused", delta: "第一段" },
+      { type: "endAssistant", messageId: "reused" },
+      { type: "startAssistant", runId: "r1", messageId: "reused" },
+      { type: "appendAssistant", messageId: "reused", delta: "第二段" },
+    ]);
+
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages.map((message) => message.content)).toEqual(["第一段", "第二段"]);
+    expect(state.messages[0]?.id).not.toBe(state.messages[1]?.id);
+  });
+
   it("结束未启动的消息不影响状态", () => {
     const state = apply([{ type: "endAssistant", messageId: "ghost" }]);
     expect(state.messages).toHaveLength(0);
@@ -164,6 +193,68 @@ describe("运行状态与中断", () => {
     const state = apply([{ type: "patchRun", patch: { status: "error", error: "模型调用失败" } }]);
     expect(state.run.status).toBe("error");
     expect(state.run.error).toBe("模型调用失败");
+  });
+
+  it("审批恢复沿用起始时间，完成后保存整轮耗时并在新运行时清空", () => {
+    let state = initialState;
+    state = reduceClientEvent(state, {
+      type: "patchRun",
+      patch: { status: "running", runId: "run-1", startedAt: 1_000 },
+    });
+    state = reduceClientEvent(state, { type: "startAssistant", runId: "run-1", messageId: "assistant-1" });
+    state = reduceClientEvent(state, { type: "patchRun", patch: { status: "waiting_approval" } });
+    state = reduceClientEvent(state, {
+      type: "patchRun",
+      patch: { status: "running", runId: "run-2" },
+    });
+    state = reduceClientEvent(state, { type: "startAssistant", runId: "run-2", messageId: "assistant-2" });
+    state = reduceClientEvent(state, { type: "appendAssistant", messageId: "assistant-2", delta: "完成总结" });
+    state = reduceClientEvent(state, {
+      type: "patchRun",
+      patch: { status: "completed", endedAt: 7_000 },
+    });
+
+    expect(state.run.startedAt).toBe(1_000);
+    expect(state.run.durationMs).toBe(6_000);
+    expect(state.messages.find((message) => message.id === "assistant-2")).toMatchObject({
+      runEndedAt: 7_000,
+      runDurationMs: 6_000,
+    });
+
+    state = reduceClientEvent(state, {
+      type: "patchRun",
+      patch: { status: "running", runId: "run-3", startedAt: 9_000 },
+    });
+    expect(state.run.startedAt).toBe(9_000);
+    expect(state.run.endedAt).toBeUndefined();
+    expect(state.run.durationMs).toBeUndefined();
+  });
+
+  it("resets the in-progress Todo item after a failed run", () => {
+    const todo = {
+      ...activity("todo:main", "todo"),
+      detail: {
+        items: [
+          { content: "done", status: "completed" as const },
+          { content: "interrupted", status: "in_progress" as const },
+          { content: "later", status: "pending" as const },
+        ],
+        completed: 1,
+        total: 3,
+      },
+    };
+    const state = apply([
+      { type: "upsertActivity", activity: todo },
+      { type: "patchRun", patch: { status: "error", error: "tool call interrupted" } },
+    ]);
+    const updated = state.activities[0]!;
+    expect(updated.status).toBe("failed");
+    expect(updated.subtitle).toContain("1/3");
+    expect((updated.detail as typeof todo.detail).items.map((item) => item.status)).toEqual([
+      "completed",
+      "pending",
+      "pending",
+    ]);
   });
 
   it("新会话清空消息与活动但保留 threadId 之外的状态独立", () => {

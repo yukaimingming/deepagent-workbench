@@ -20,10 +20,34 @@
   --color-foreground: #ffffff;
   --color-muted-foreground: #71717a;
   --color-ring: #3f3f46;
-  --color-input: #27272a;
+  --color-input: #3f3f46;
+
+  /* shadcn/ui 语义令牌：Confirmation / Alert / Button / Card 等组件依赖，
+     暗色取值对齐 AI SDK Elements 官网（近黑卡片、白 10% 边框、亮蓝主按钮）。 */
+  --color-background: #050505;
+  --color-card: #141417;
+  --color-card-foreground: #f4f4f5;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1f1f23;
+  --color-secondary-foreground: #e4e4e7;
+  --color-accent: #27272a;
+  --color-accent-foreground: #f4f4f5;
+  --color-destructive: #ef4444;
+  --color-border: rgba(255, 255, 255, 0.1);
 
   --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/* Tailwind v4 的 border 默认取 currentColor，与 shadcn/ui 组件（默认 border-border）
+   不兼容；统一回填语义边框色，避免 Confirmation 卡片出现纯白描边。 */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
 }
 
 :root {
@@ -93,6 +117,26 @@ body,
   animation: soft-pulse 1.4s ease-in-out infinite;
 }
 
+/* 过程活动按时间线轻柔进入；同一时刻发出的并行调用会短暂错开。 */
+@keyframes process-activity-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.process-activity-enter {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .process-activity-enter {
+    animation: none;
+  }
+}
+
 /* 文字微光扫过（AI Elements 的 Shimmer 组件使用）。 */
 @keyframes shimmer-sweep {
   0% {
@@ -115,10 +159,36 @@ html.light,
   --color-text-primary: #0f172a;
   --color-text-secondary: #334155;
   --color-text-muted: #64748b;
+  --color-state-running: #1d4ed8;
+  --color-state-done: #15803d;
+  --color-state-warn: #b45309;
+  --color-state-error: #b91c1c;
   --color-foreground: #0f172a;
   --color-muted-foreground: #64748b;
   --color-input: #ffffff;
   --color-ring: #cbd5e1;
+
+  /* 语义令牌浅色取值：纯白卡片 + 清晰浅灰边框，批准按钮保持亮蓝突出。 */
+  --color-background: #ffffff;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f1f5f9;
+  --color-secondary-foreground: #0f172a;
+  --color-accent: #f1f5f9;
+  --color-accent-foreground: #0f172a;
+  --color-destructive: #dc2626;
+  --color-border: #e2e8f0;
+  --color-diff-add: #166534;
+  --color-diff-delete: #b91c1c;
+  --color-diff-context: #334155;
+}
+
+:root {
+  --color-diff-add: #86efac;
+  --color-diff-delete: #fca5a5;
+  --color-diff-context: #a3adbf;
 }
 
 html.light body,
@@ -275,6 +345,48 @@ html.light .workspace-dropdown-panel button svg {
 html.light .workspace-dropdown-panel button:hover svg,
 html.light .workspace-dropdown-panel button.bg-\[\#2f2f35\] svg {
   color: #0f172a !important;
+}
+
+/* 输入框的权限、模型和思考等级菜单沿用工作区选择器的主题配色。 */
+html.light .composer-selector {
+  color: #334155 !important;
+  background-color: #f1f5f9 !important;
+}
+html.light .composer-selector:hover {
+  color: #0f172a !important;
+  background-color: #e2e8f0 !important;
+}
+html.light .composer-menu {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+html.light .composer-menu button:not(.bg-\[\#2f2f35\]) {
+  color: #334155 !important;
+}
+html.light .composer-menu button:hover,
+html.light .composer-menu button.bg-\[\#2f2f35\] {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+html.light .composer-menu .text-zinc-500,
+html.light .composer-menu .text-zinc-400,
+html.light .composer-menu .text-zinc-600 {
+  color: #64748b !important;
+}
+html.light .composer-menu .text-orange-400 {
+  color: #c2410c !important;
+}
+html.light .new-chat-sidebar-button {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+html.light .new-chat-sidebar-button:hover,
+html.light .sidebar-add-workspace-button:hover {
+  background-color: #e2e8f0 !important;
+}
+html.light .sidebar-section-heading {
+  color: #475569 !important;
 }
 
 /* ================= 消息区向下滚动按钮：完全不透明纯黑/纯白 ================= */

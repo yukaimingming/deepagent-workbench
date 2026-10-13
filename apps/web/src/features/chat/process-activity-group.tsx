@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type SyntheticEvent } from "react";
+import { MessageResponse } from "../../components/ai-elements/message.js";
 import {
   BrainCircuitIcon,
   CheckCircle2Icon,
@@ -37,6 +38,8 @@ export function hasActiveProcess(items: ProcessTimelineItem[], toolActivities: A
 
 interface ProcessActivityGroupProps {
   items: ProcessTimelineItem[];
+  isActive?: boolean;
+  startedAt?: number;
   finalAnswerComplete?: boolean;
   finalAnswerStreaming?: boolean;
   runCompleted?: boolean;
@@ -135,13 +138,99 @@ function reasoningPreview(content: string): string {
   return content.trim().split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
 }
 
-function actionIcon(name: string) {
-  if (name === "execute") return TerminalIcon;
-  if (name === "write_todos") return PencilLineIcon;
-  if (name === "read_file" || name === "ls" || name === "grep" || name === "glob") return FileSearchIcon;
-  if (name === "task") return BrainCircuitIcon;
-  if (name === "delete_file") return TriangleAlertIcon;
-  return ListTodoIcon;
+function isLiveActivity(activity: Activity): boolean {
+  return activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval";
+}
+
+/** 执行中强制展开，结束后保持当前开合，方便继续查看刚流式出现的内容。 */
+function useLiveDetailsOpen(live: boolean): [boolean, (event: SyntheticEvent<HTMLDetailsElement>) => void] {
+  const [open, setOpen] = useState(live);
+  const [trackedLive, setTrackedLive] = useState(live);
+  if (live !== trackedLive) {
+    setTrackedLive(live);
+    if (live) setOpen(true);
+  }
+  return [open, (event) => setOpen(event.currentTarget.open)];
+}
+
+function ActionGlyph({ name, className }: { name: string; className?: string }) {
+  if (name === "execute") return <TerminalIcon className={className} />;
+  if (name === "write_todos") return <PencilLineIcon className={className} />;
+  if (name === "read_file" || name === "ls" || name === "grep" || name === "glob") return <FileSearchIcon className={className} />;
+  if (name === "task") return <BrainCircuitIcon className={className} />;
+  if (name === "delete_file") return <TriangleAlertIcon className={className} />;
+  return <ListTodoIcon className={className} />;
+}
+
+function StreamingText({ content, streaming }: { content: string; streaming?: boolean }) {
+  return (
+    <MessageResponse mode="static" isAnimating={Boolean(streaming)}>
+      {content}
+    </MessageResponse>
+  );
+}
+
+function ReasoningActivity({ item }: { item: Extract<ProcessTimelineItem, { kind: "assistant" }> }) {
+  const [open, onToggle] = useLiveDetailsOpen(Boolean(item.streaming));
+  return (
+    <details className="process-activity-enter group" open={open} onToggle={onToggle}>
+      <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-[13px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
+        <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
+        {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="shrink-0 font-medium">思考</Shimmer> : <span className="shrink-0">思考</span>}
+        {!open && <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>}
+        <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="ml-[26px] mt-1.5 break-words border-l border-[var(--color-border-subtle)] pl-3 text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+        <StreamingText content={item.content} streaming={item.streaming} />
+      </div>
+    </details>
+  );
+}
+
+function ToolActivityRow({
+  itemId,
+  activity,
+  style,
+}: {
+  itemId: string;
+  activity: Activity;
+  style: { animationDelay: string };
+}) {
+  const live = isLiveActivity(activity);
+  const [open, onToggle] = useLiveDetailsOpen(live);
+  const name = toolName(activity);
+  const summaryText = toolInputSummary(activity);
+  const sections = detailSections(activity);
+  const detail = activity.detail as { truncated?: unknown } | undefined;
+  const tone = activity.status === "failed"
+    ? "text-[var(--color-state-error)]"
+    : activity.status === "waiting_approval"
+      ? "text-[var(--color-state-warn)]"
+      : "text-[var(--color-text-secondary)]";
+  return (
+    <div key={itemId} className={`process-activity-enter flex min-w-0 items-start gap-2 text-[13px] ${tone}`} style={style}>
+      <ActionGlyph name={name} className="mt-0.5 size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
+      <div className="min-w-0 flex-1">
+        <details className="group" open={open} onToggle={onToggle}>
+          <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
+            {live ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{activityLabel(activity)}</Shimmer> : <span>{activityLabel(activity)}</span>}
+            {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
+            <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-2 space-y-3">
+            {sections.map((section) => (
+              <section key={section.label}>
+                <h4 className="mb-1 text-[11px] font-medium text-[var(--color-text-muted)]">{section.label}</h4>
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2.5 font-mono text-[11px] leading-relaxed text-[var(--color-text-primary)]">{section.value}</pre>
+              </section>
+            ))}
+            {detail?.truncated === true && <p className="text-[12px] text-[var(--color-text-muted)]">服务端返回的结果已截断</p>}
+            {sections.length === 0 && <p className="text-[13px] text-[var(--color-text-muted)]">此工具调用没有提供可展示的参数或结果。</p>}
+          </div>
+        </details>
+      </div>
+    </div>
+  );
 }
 
 function activityLabel(activity: Activity): string {
@@ -156,12 +245,15 @@ function activityLabel(activity: Activity): string {
 
 export function ProcessActivityGroup({
   items,
+  isActive = false,
+  startedAt: runStartedAt,
   finalAnswerComplete = false,
   finalAnswerStreaming = false,
   runCompleted = true,
   durationMs,
 }: ProcessActivityGroupProps) {
-  const [expanded, setExpanded] = useState(!finalAnswerComplete);
+  const [manualExpanded, setManualExpanded] = useState<boolean | undefined>(undefined);
+  const expanded = manualExpanded ?? true;
   const [now, setNow] = useState(() => Date.now());
 
   const activities = items.flatMap((item) => item.kind === "activity" ? [item.activity] : []);
@@ -170,15 +262,15 @@ export function ProcessActivityGroup({
   ).length;
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
-  const isComplete = finalAnswerComplete || (
-    runCompleted && activeCount === 0 && !hasStreamingMessage && !finalAnswerStreaming
+  const isComplete = finalAnswerComplete || finalAnswerStreaming || (
+    runCompleted && activeCount === 0 && !hasStreamingMessage
   );
   const startedAt = items.length > 0
     ? Math.min(...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt))
-    : now;
+    : runStartedAt ?? now;
   const endedAt = Math.max(startedAt, ...activities.map((activity) => activity.endedAt ?? activity.startedAt));
   const elapsedMs = isComplete
-    ? durationMs ?? (finalAnswerComplete ? now - startedAt : endedAt - startedAt)
+    ? durationMs ?? (finalAnswerComplete || finalAnswerStreaming ? now - startedAt : endedAt - startedAt)
     : Math.max(durationMs ?? 0, now - startedAt);
   const statusLabel = isComplete ? "已完成分析" : "正在分析";
 
@@ -187,14 +279,14 @@ export function ProcessActivityGroup({
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [isComplete]);
-  if (items.length === 0) return null;
+  if (items.length === 0 && !isActive) return null;
 
   return (
     <section className="process-group my-3 w-full text-[var(--color-text-primary)]">
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => setManualExpanded(!expanded)}
         className="flex w-full items-center gap-2 border-b border-[var(--color-border-subtle)] py-2.5 text-left text-[15px] text-[var(--color-text-secondary)] transition-colors"
       >
         {!isComplete ? (
@@ -218,19 +310,7 @@ export function ProcessActivityGroup({
             const staggerStyle = { animationDelay: `${Math.min(index, 8) * 45}ms` };
             if (item.kind === "assistant") {
               if (item.section === "reasoning") {
-                return (
-                  <details key={item.id} className="process-activity-enter group" style={staggerStyle}>
-                    <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-[13px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
-                      <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                      {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="shrink-0 font-medium">思考</Shimmer> : <span className="shrink-0">思考</span>}
-                      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>
-                      <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="ml-[26px] mt-1.5 whitespace-pre-wrap break-words border-l border-[var(--color-border-subtle)] pl-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
-                      {item.content}
-                    </div>
-                  </details>
-                );
+                return <div key={item.id} style={staggerStyle}><ReasoningActivity item={item} /></div>;
               }
               return (
                 <article key={item.id} className="process-activity-enter" style={staggerStyle}>
@@ -242,8 +322,8 @@ export function ProcessActivityGroup({
                     )}
                     {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{item.label.replace(/^已完成/, "正在")}</Shimmer> : <span>{item.label}</span>}
                   </div>
-                  <div className="mt-1.5 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--color-text-primary)]">
-                    {item.content}
+                  <div className="mt-1.5 break-words text-[15px] leading-relaxed text-[var(--color-text-primary)]">
+                    <StreamingText content={item.content} streaming={item.streaming} />
                   </div>
                 </article>
               );
@@ -274,40 +354,7 @@ export function ProcessActivityGroup({
               );
             }
 
-            const name = toolName(activity);
-            const Icon = actionIcon(name);
-            const summaryText = toolInputSummary(activity);
-            const sections = detailSections(activity);
-            const detail = activity.detail as { truncated?: unknown } | undefined;
-            const tone = activity.status === "failed"
-              ? "text-[var(--color-state-error)]"
-              : activity.status === "waiting_approval"
-                ? "text-[var(--color-state-warn)]"
-                : "text-[var(--color-text-secondary)]";
-            return (
-              <div key={item.id} className={`process-activity-enter flex min-w-0 items-start gap-2 text-[13px] ${tone}`} style={staggerStyle}>
-                <Icon className="mt-0.5 size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                <div className="min-w-0 flex-1">
-                  <details className="group">
-                    <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
-                      {activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval" ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{activityLabel(activity)}</Shimmer> : <span>{activityLabel(activity)}</span>}
-                      {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
-                      <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
-                    </summary>
-                    <div className="mt-2 space-y-3">
-                      {sections.map((section) => (
-                        <section key={section.label}>
-                          <h4 className="mb-1 text-[11px] font-medium text-[var(--color-text-muted)]">{section.label}</h4>
-                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2.5 font-mono text-[11px] leading-relaxed text-[var(--color-text-primary)]">{section.value}</pre>
-                        </section>
-                      ))}
-                      {detail?.truncated === true && <p className="text-[12px] text-[var(--color-text-muted)]">服务端返回的结果已截断</p>}
-                      {sections.length === 0 && <p className="text-[13px] text-[var(--color-text-muted)]">此工具调用没有提供可展示的参数或结果。</p>}
-                    </div>
-                  </details>
-                </div>
-              </div>
-            );
+            return <ToolActivityRow key={item.id} itemId={item.id} activity={activity} style={staggerStyle} />;
           })}
         </div>
       )}

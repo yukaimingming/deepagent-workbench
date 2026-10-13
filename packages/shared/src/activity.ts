@@ -5,6 +5,8 @@
  * 服务端负责把 Deep Agents 的内部事件映射成这些卡片。
  */
 
+import type { FileDiff } from "./diff.js";
+
 /** 卡片类型。 */
 export type ActivityKind =
   | "todo"
@@ -82,6 +84,8 @@ export interface SubagentDetail {
 export interface FileDetail {
   path: string;
   operation: "read" | "write" | "edit" | "delete" | "list" | "grep" | "glob";
+  /** 写入/修改/删除操作的内容差异（只读操作没有）。 */
+  diff?: FileDiff;
 }
 
 /** 人工审批卡片详情。 */
@@ -109,10 +113,30 @@ export type RunStatus =
   | "error";
 
 /** 前端运行快照（由 AG-UI 客户端订阅维护）。 */
+/** 单次运行的 Token 用量统计（来自模型返回的 usage_metadata 汇总）。 */
+export interface RunTokenUsage {
+  /** 累计输入 Token（全部模型调用之和）。 */
+  inputTokens: number;
+  /** 累计输出 Token。 */
+  outputTokens: number;
+  /** 累计总 Token。 */
+  totalTokens: number;
+  /** 命中缓存的输入 Token（提示词缓存）。 */
+  cachedInputTokens: number;
+  /** 最后一次模型调用的输入 Token，近似当前上下文占用。 */
+  lastInputTokens: number;
+  /** 模型上下文窗口大小（Token 数），未知为 null（前端显示参考值说明）。 */
+  contextWindow: number | null;
+}
+
 export interface RunSnapshot {
   status: RunStatus;
   runId: string | null;
   threadId: string | null;
+  /** 当前任务从首次发起到结束的墙钟时间戳与用时。 */
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
   /** 面向用户的公开进度摘要，不含原始思维链。 */
   progressNote: string | null;
   /** 待人工审批的中断列表。 */
@@ -125,6 +149,8 @@ export interface RunSnapshot {
     allowedDecisions: Array<"approve" | "edit" | "reject">;
   }>;
   error: string | null;
+  /** 本次运行的 Token 用量（运行结束/进入等待审批时下发）。 */
+  usage?: RunTokenUsage;
 }
 
 /** 大文本截断工具：限制前端展示长度，保留完整内容的查看入口。 */

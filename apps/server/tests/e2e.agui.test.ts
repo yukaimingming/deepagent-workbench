@@ -94,6 +94,40 @@ describe("AG-UI SSE 协议合规性", () => {
     expect(String(last?.message)).toContain("模型设置");
   });
 
+  it("accepts multimodal AG-UI message content", async () => {
+    const events = await runAgent({
+      threadId: "thread-multimodal",
+      runId: "run-multimodal",
+      messages: [{
+        id: "m-image",
+        role: "user",
+        content: [
+          { type: "text", text: "Describe the image" },
+          { type: "image", source: { type: "data", value: "aW1hZ2U=", mimeType: "image/png" } },
+          { type: "document", source: { type: "data", value: "JVBERi0x", mimeType: "application/pdf" } },
+        ],
+      }],
+      tools: [],
+      context: [],
+    });
+
+    expect(events[0]?.type).toBe("RUN_STARTED");
+    expect(events.at(-1)?.type).toBe("RUN_ERROR");
+  });
+
+  it("accepts JSON request bodies larger than 1 MiB", async () => {
+    const events = await runAgent({
+      threadId: "thread-large-body",
+      runId: "run-large-body",
+      messages: [{ id: "m-large", role: "user", content: "x".repeat(1_100_000) }],
+      tools: [],
+      context: [],
+    });
+
+    expect(events[0]?.type).toBe("RUN_STARTED");
+    expect(events.at(-1)?.type).toBe("RUN_ERROR");
+  });
+
   it("SSE 响应使用 AG-UI 媒体类型且禁用缓冲", async () => {
     const response = await fetch(`${baseUrl}/agent`, {
       method: "POST",

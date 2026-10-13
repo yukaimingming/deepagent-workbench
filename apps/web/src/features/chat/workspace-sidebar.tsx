@@ -19,10 +19,12 @@ import {
   FolderPlusIcon,
   FolderMinusIcon,
   Trash2Icon,
+  EraserIcon,
   PanelLeftCloseIcon,
   SettingsIcon,
   SearchIcon,
   AlertTriangleIcon,
+  PencilIcon,
 } from "lucide-react";
 import type { FolderGroup, SessionSummary } from "./use-sessions.js";
 import { FolderPickerModal } from "./folder-picker-modal.js";
@@ -50,6 +52,8 @@ interface WorkspaceSidebarProps {
   onSelectSession: (id: string) => void;
   /** 删除会话 */
   onRemoveSession: (id: string) => void;
+  /** 清空指定会话的全部消息（保留会话本身） */
+  onClearSession?: (id: string) => void;
   /** 打开模型设置模态框 */
   onOpenSettings: () => void;
   /** 添加工作区文件夹 */
@@ -61,13 +65,29 @@ interface WorkspaceSidebarProps {
   serverUrl?: string;
 }
 
-/** 格式化会话更新时间为 HH:mm 格式（例如 14:14） */
+/**
+ * 格式化会话更新时间：
+ * - 当天：HH:mm（例如 14:14）
+ * - 跨天（同年）：M月D日
+ * - 跨年：YYYY年M月D日
+ */
 function formatSessionTime(timestamp?: number): string {
   if (!timestamp) return "";
   const d = new Date(timestamp);
-  const hours = String(d.getHours()).padStart(2, "0");
-  const minutes = String(d.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes}`;
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 export function WorkspaceSidebar({
@@ -81,6 +101,7 @@ export function WorkspaceSidebar({
   runningSessionIds,
   onSelectSession,
   onRemoveSession,
+  onClearSession,
   onOpenSettings,
   onAddWorkspace,
   onRemoveWorkspace,
@@ -138,25 +159,62 @@ export function WorkspaceSidebar({
     setFolderToDelete(null);
   }, [folderToDelete, onRemoveWorkspace]);
 
+  const orderedGroups = [...groupedSessions].sort((a, b) => Number(!a.folderPath) - Number(!b.folderPath));
+
+  const renderSession = (session: SessionSummary) => {
+    const isActive = session.id === activeSessionId;
+    const isSessionRunning = runningSessionIds?.includes(session.id) === true;
+    return (
+      <div
+        key={session.id}
+        onClick={() => onSelectSession(session.id)}
+        className={`group/session sidebar-session-item relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-pointer transition-colors ${
+          isActive ? "bg-zinc-800 text-white font-medium shadow-xs" : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+        }`}
+        data-active={isActive ? "true" : "false"}
+        data-session-id={session.id}
+      >
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          {isSessionRunning ? (
+            <span className="size-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="正在执行中" />
+          ) : isActive ? (
+            <span className="size-2 rounded-full bg-zinc-200 shrink-0" />
+          ) : (
+            <span className="size-2 rounded-full border border-zinc-500 shrink-0" />
+          )}
+          <span className="truncate text-[12.5px]">{session.title}</span>
+          {isSessionRunning && <span className="shrink-0 text-[10.5px] text-emerald-400/80">执行中</span>}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0 ml-1">
+          <span className="text-[11px] text-zinc-500 tabular-nums select-none session-time">
+            {formatSessionTime(session.updatedAt || session.createdAt)}
+          </span>
+          {onClearSession && (
+            <button type="button" onClick={(event) => { event.stopPropagation(); onClearSession(session.id); }}
+              className="opacity-0 group-hover/session:opacity-100 p-0.5 text-zinc-500 hover:text-amber-400 hover:bg-zinc-700/60 rounded transition-opacity"
+              title="清空会话内容（保留会话）"><EraserIcon className="size-3" /></button>
+          )}
+          <button type="button" onClick={(event) => { event.stopPropagation(); onRemoveSession(session.id); }}
+            className="opacity-0 group-hover/session:opacity-100 p-0.5 text-red-500 hover:text-red-600 hover:bg-zinc-700/60 rounded transition-opacity"
+            title="删除会话"><Trash2Icon className="size-3" /></button>
+        </div>
+      </div>
+    );
+  };
+
   if (!isOpen) return null;
 
   return (
     <>
       <aside className="relative flex h-full w-[260px] shrink-0 flex-col border-r border-zinc-800/60 bg-black text-zinc-300 select-none animate-in slide-in-from-left duration-200">
         {/* ================= 顶部操作栏（去除了无用的工作区名称按钮，保留核心操作） ================= */}
-        <div className="flex h-12 items-center justify-end px-3 border-b border-zinc-800/40">
+        <div className="flex h-16 items-center gap-2 px-3 border-b border-zinc-800/40">
+          <button type="button" onClick={() => onNewSession(selected ?? undefined)}
+            className="new-chat-sidebar-button flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-xl bg-zinc-900 px-3 text-sm font-medium text-zinc-100 hover:bg-zinc-800 transition-colors">
+            <PencilIcon className="size-4 shrink-0" />
+            <span>新聊天</span>
+          </button>
           <div className="flex items-center gap-0.5">
-            {/* 添加文件夹按钮（弹窗选择） */}
-            <button
-              type="button"
-              onClick={() => (onOpenFolderPicker ? onOpenFolderPicker() : setIsFolderPickerOpen(true))}
-              className="flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
-              title="添加工作区文件夹（弹窗浏览选择）"
-            >
-              <FolderPlusIcon className="size-3.5" />
-            </button>
-
-            {/* 搜索开关 */}
             <button
               type="button"
               onClick={() => setShowSearch((v) => !v)}
@@ -164,16 +222,6 @@ export function WorkspaceSidebar({
               title="搜索会话"
             >
               <SearchIcon className="size-3.5" />
-            </button>
-
-            {/* 新建对话按钮 */}
-            <button
-              type="button"
-              onClick={() => onNewSession(selected ?? undefined)}
-              className="flex size-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
-              title="新建对话"
-            >
-              <PlusIcon className="size-4" />
             </button>
 
             {/* 收缩侧边栏按钮 */}
@@ -203,7 +251,13 @@ export function WorkspaceSidebar({
 
         {/* ================= 主体会话树（每个文件夹下面对应专属聊天记录） ================= */}
         <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4 scrollbar-thin scrollbar-thumb-zinc-800">
-          {groupedSessions.map((group) => {
+          <div className="sidebar-section-heading flex items-center justify-between px-2 pt-1 text-[12px] font-semibold text-zinc-400">
+            <span>工作区</span>
+            <button type="button" onClick={() => (onOpenFolderPicker ? onOpenFolderPicker() : setIsFolderPickerOpen(true))}
+              className="sidebar-add-workspace-button rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              title="添加工作区"><FolderPlusIcon className="size-3.5" /></button>
+          </div>
+          {orderedGroups.map((group) => {
             const isCollapsed = !!collapsedFolders[group.folderPath];
             const isCurrentSelectedFolder = selected === group.folderPath;
 
@@ -214,6 +268,19 @@ export function WorkspaceSidebar({
 
             if (searchQuery.trim() && filteredSessions.length === 0) {
               return null;
+            }
+
+            if (!group.folderPath) {
+              return (
+                <div key="recent-sessions" className="flex flex-col space-y-1">
+                  <div className="sidebar-section-heading px-2 py-1.5 text-[12.5px] font-semibold text-zinc-400">最近</div>
+                  <div className="flex flex-col space-y-0.5">
+                    {filteredSessions.length > 0
+                      ? filteredSessions.map(renderSession)
+                      : <div className="px-2 py-2 text-[11.5px] text-zinc-500">暂无直接聊天</div>}
+                  </div>
+                </div>
+              );
             }
 
             return (
@@ -285,64 +352,7 @@ export function WorkspaceSidebar({
                         <span>暂无对话，点击新建</span>
                       </div>
                     ) : (
-                      filteredSessions.map((session) => {
-                        const isActive = session.id === activeSessionId;
-                        const isSessionRunning = runningSessionIds?.includes(session.id) === true;
-                        return (
-                          <div
-                            key={session.id}
-                            onClick={() => {
-                              onSelect(group.folderPath);
-                              onSelectSession(session.id);
-                            }}
-                            className={`group/session sidebar-session-item relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-pointer transition-colors ${
-                              isActive
-                                ? "bg-zinc-800 text-white font-medium shadow-xs"
-                                : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
-                            }`}
-                            data-active={isActive ? "true" : "false"}
-                            data-session-id={session.id}
-                          >
-                            {/* 左侧状态圆点：后台执行中显示绿色脉冲 */}
-                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                              {isSessionRunning ? (
-                                <span
-                                  className="size-2 rounded-full bg-emerald-400 animate-pulse shrink-0"
-                                  title="正在执行中"
-                                />
-                              ) : isActive ? (
-                                <span className="size-2 rounded-full bg-zinc-200 shrink-0" />
-                              ) : (
-                                <span className="size-2 rounded-full border border-zinc-500 shrink-0" />
-                              )}
-                              <span className="truncate text-[12.5px]">{session.title}</span>
-                              {isSessionRunning && (
-                                <span className="shrink-0 text-[10.5px] text-emerald-400/80">
-                                  执行中
-                                </span>
-                              )}
-                            </div>
-
-                            {/* 右侧：时间显示与会话删除按钮 */}
-                            <div className="flex items-center gap-1.5 shrink-0 ml-1">
-                              <span className="text-[11px] text-zinc-500 tabular-nums select-none session-time">
-                                {formatSessionTime(session.updatedAt || session.createdAt)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onRemoveSession(session.id);
-                                }}
-                                className="opacity-0 group-hover/session:opacity-100 p-0.5 text-zinc-500 hover:text-rose-400 hover:bg-zinc-700/60 rounded transition-opacity"
-                                title="删除会话"
-                              >
-                                <Trash2Icon className="size-3" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
+                      filteredSessions.map(renderSession)
                     )}
                   </div>
                 )}

@@ -134,3 +134,44 @@ export const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   anthropic: "https://api.anthropic.com/v1",
   "openai-compatible": "http://127.0.0.1:11434/v1",
 };
+
+/**
+ * 已知模型前缀的上下文窗口参考值（Token 数）。
+ *
+ * 官方模型列表接口普遍不返回上下文窗口，这里只能按模型家族给出
+ * 常用的公开参考值；UI 需标注「约」。未命中的模型返回 null，前端显示「—」。
+ */
+const CONTEXT_WINDOW_PREFIXES: Array<[string, number]> = [
+  ["claude", 200_000],
+  ["gpt-5", 400_000],
+  ["gpt-4.1", 1_000_000],
+  ["gpt-4o", 128_000],
+  ["gpt-4", 128_000],
+  ["o3", 200_000],
+  ["o4", 200_000],
+  ["o1", 200_000],
+  ["gemini", 1_000_000],
+  ["deepseek", 131_072],
+  ["qwen", 131_072],
+  ["kimi", 256_000],
+  ["glm", 128_000],
+  ["step", 128_000],
+  ["doubao", 256_000],
+  ["minimax", 1_000_000],
+];
+
+/**
+ * 按模型 ID 前缀解析上下文窗口参考值；未识别的模型返回 null。
+ *
+ * 匹配规则：先剥掉 `provider/model` 形式的命名空间前缀，再用
+ * startsWith 精确匹配家族前缀，避免子串误命中（例如把
+ * `my-gpt-4-proxy` 误判为 GPT-4 家族）。
+ */
+export function resolveContextWindow(modelId: string | null | undefined): number | null {
+  if (!modelId) return null;
+  const bare = (modelId.split("/").pop() ?? modelId).toLowerCase();
+  for (const [prefix, window] of CONTEXT_WINDOW_PREFIXES) {
+    if (bare.startsWith(prefix)) return window;
+  }
+  return null;
+}

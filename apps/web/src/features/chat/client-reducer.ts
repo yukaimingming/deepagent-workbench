@@ -6,11 +6,14 @@
  */
 
 import { EventType, type BaseEvent, type RunAgentParameters } from "@ag-ui/client";
+import type { FileUIPart } from "ai";
 import {
   AGUI_CUSTOM_EVENT,
   type Activity,
   type RunSnapshot,
   type RunStatus,
+  DEFAULT_PERMISSION_MODE,
+  type PermissionMode,
 } from "@deepagent/shared";
 import { randomUUID } from "../../uuid.js";
 
@@ -19,13 +22,15 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** 用户上传的图片/文件；url 为本次运行使用的数据 URL。 */
+  attachments?: Array<FileUIPart & { id: string }>;
   /** 是否正在流式生成。 */
   streaming: boolean;
   /** 关联的 runId。 */
   runId?: string;
   /**
-   * 安全推理摘要（公开进度描述，不是原始思维链）。
-   * 与 content 分开存：思考先流式完成，正文才开始流式输出。
+   * 模型原始 reasoning 增量，与 content 分开存储并按原样流式展示。
+   * 与 content 分开存：推理流先完成，正文再开始流式输出。
    */
   reasoning?: string;
   /** 思考是否仍在流式输出。 */
@@ -36,6 +41,9 @@ export interface ChatMessage {
   reasoningDuration?: number;
   /** 消息创建时间戳（毫秒） */
   createdAt?: number;
+  /** 整轮任务完成时间与耗时，便于历史过程摘要复用。 */
+  runEndedAt?: number;
+  runDurationMs?: number;
 }
 
 /** 待处理的人工审批决策。 */
@@ -57,7 +65,7 @@ export interface ClientState {
 
 /** 所有状态转移动作。 */
 export type ClientAction =
-  | { type: "addUserMessage"; id: string; content: string }
+  | { type: "addUserMessage"; id: string; content: string; attachments?: Array<FileUIPart & { id: string }> }
   | { type: "startPendingAssistant"; messageId: string; startedAt: number }
   | { type: "startAssistant"; runId: string; messageId: string }
   | { type: "appendAssistant"; messageId: string; delta: string }
@@ -120,23 +128,33 @@ function findCurrentAssistantIndex(
 ): number {
   if (messageId) {
     const byId = messages.findIndex((m) => m.id === messageId);
-    if (byId !== -1) return byId;
+    if (byId !== -1 && messages[byId]?.role === "assistant" && !messages[byId]?.content) return byId;
   }
   if (runId) {
-    const byRun = messages.findIndex((m) => m.role === "assistant" && m.runId === runId);
+    // 只合并本轮最后一个仍无正文的过程段，不能把同一运行中已完成的
+    // 中间回答重新命中，否则后续节点会串入旧气泡的 Markdown 正文。
+    const byRun = messages.findLastIndex(
+      (m) => m.role === "assistant" && m.runId === runId && !m.content,
+    );
     if (byRun !== -1) return byRun;
   }
   // 查找最后一条 user 消息之后创建的 assistant 消息
   const lastUserIndex = messages.findLastIndex((m) => m.role === "user");
   if (lastUserIndex !== -1) {
     for (let i = lastUserIndex + 1; i < messages.length; i++) {
-      if (messages[i]?.role === "assistant") return i;
+      if (
+        messages[i]?.role === "assistant" &&
+        !messages[i]?.content &&
+        (!runId || messages[i]?.runId === runId)
+      ) return i;
     }
   }
-  // 兜底：若最后一条本身就是 assistant 消息
-  if (messages.length > 0 && messages[messages.length - 1]?.role === "assistant") {
-    return messages.length - 1;
-  }
+  const lastMessage = messages.at(-1);
+  if (
+    lastMessage?.role === "assistant" &&
+    !lastMessage.content &&
+    (!runId || lastMessage.runId === runId)
+  ) return messages.length - 1;
   return -1;
 }
 
@@ -152,6 +170,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
             id: action.id,
             role: "user",
             content: action.content,
+            ...(action.attachments?.length ? { attachments: action.attachments } : {}),
             streaming: false,
             createdAt: Date.now(),
           },
@@ -171,6 +190,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
             reasoning: "",
             reasoningStreaming: true,
             reasoningStartedAt: action.startedAt,
+            createdAt: action.startedAt,
           },
         ],
       };
@@ -182,35 +202,50 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         action.runId,
         action.messageId,
       );
-      if (existingIndex !== -1) {
+      // 仅当目标还没有正文（思考占位 / 空占位）时才合并；
+      // 已有正文说明上一个模型节点已收尾，本轮节点自成一条新气泡，
+      // 实现「推理 → 模型说话 → 工具 → 推理 → …」按节点分段展示。
+      if (existingIndex !== -1 && state.messages[existingIndex]!.content.length === 0) {
         const messages = [...state.messages];
         const target = messages[existingIndex]!;
+        // 保留过程占位的 React key，避免推理段切换到正文时整块重挂载闪烁。
         textToAssistant.set(bindingKey(state.threadId, action.messageId), target.id);
         const started = target.reasoningStartedAt ?? Date.now();
         const elapsed =
           target.reasoningDuration ??
           Math.max(1, Math.round((Date.now() - started) / 1000));
+        // 思考流标记不在这里翻转：仅有内容的思考且 REASONING_MESSAGE_END
+        // 尚未到达时保持流式，等 END 或第一条正文增量再收尾；
+        // 空思考占位（startPendingAssistant）直接视为无思考，避免空面板闪现。
+        const keepReasoningStreaming =
+          target.reasoningStreaming === true &&
+          Boolean(target.reasoning && target.reasoning.trim().length > 0);
         messages[existingIndex] = {
           ...target,
           streaming: true,
-          reasoningStreaming: false,
-          reasoningDuration: target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
+          reasoningStreaming: keepReasoningStreaming,
+          reasoningDuration:
+            target.reasoning && target.reasoning.trim().length > 0 ? elapsed : undefined,
           runId: action.runId || target.runId,
         };
         return { ...state, messages };
       }
 
-      textToAssistant.set(bindingKey(state.threadId, action.messageId), action.messageId);
+      const assistantId = state.messages.some((message) => message.id === action.messageId)
+        ? randomUUID()
+        : action.messageId;
+      textToAssistant.set(bindingKey(state.threadId, action.messageId), assistantId);
       return {
         ...state,
         messages: [
           ...state.messages,
           {
-            id: action.messageId,
+            id: assistantId,
             role: "assistant",
             content: "",
             streaming: true,
             runId: action.runId,
+            createdAt: Date.now(),
           },
         ],
       };
@@ -258,32 +293,39 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
       if (existingIndex !== -1) {
         const messages = [...state.messages];
         const target = messages[existingIndex]!;
-        // 铁律防回退锁：一旦正文已开始或思考已宣告完成，绝不重新进入思考流
-        if (target.content.length > 0 || (target.reasoningDuration !== undefined && !target.reasoningStreaming)) {
-          return state;
+        // 防回退锁：一旦正文已开始或思考已宣告完成，绝不重新进入思考流。
+        // 若该消息已有正文（上一轮已收尾），本轮思考自成一条新消息，
+        // 既不丢内容，也不会覆盖已有正文。
+        const canMerge =
+          target.content.length === 0 &&
+          !(target.reasoningDuration !== undefined && !target.reasoningStreaming);
+        if (canMerge) {
+          reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), target.id);
+          messages[existingIndex] = {
+            ...target,
+            reasoningStreaming: true,
+            reasoningStartedAt: target.reasoningStartedAt ?? Date.now(),
+            runId: action.runId || target.runId,
+            // 多轮思考平滑追加衔接
+            reasoning:
+              target.reasoning && !target.reasoning.endsWith("\n\n")
+                ? target.reasoning + "\n\n"
+                : target.reasoning,
+          };
+          return { ...state, messages };
         }
-        reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), target.id);
-        messages[existingIndex] = {
-          ...target,
-          reasoningStreaming: true,
-          reasoningStartedAt: target.reasoningStartedAt ?? Date.now(),
-          runId: action.runId || target.runId,
-          // 多轮思考平滑追加衔接
-          reasoning:
-            target.reasoning && !target.reasoning.endsWith("\n\n")
-              ? target.reasoning + "\n\n"
-              : target.reasoning,
-        };
-        return { ...state, messages };
       }
 
-      reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), action.messageId);
+      const reasoningId = state.messages.some((message) => message.id === action.messageId)
+        ? randomUUID()
+        : action.messageId;
+      reasoningToAssistant.set(bindingKey(state.threadId, action.messageId), reasoningId);
       return {
         ...state,
         messages: [
           ...state.messages,
           {
-            id: action.messageId,
+            id: reasoningId,
             role: "assistant",
             content: "",
             streaming: false,
@@ -291,6 +333,7 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
             reasoning: "",
             reasoningStreaming: true,
             reasoningStartedAt: Date.now(),
+            createdAt: Date.now(),
           },
         ],
       };
@@ -386,7 +429,65 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
               : m,
           );
       }
-      return { ...state, messages, run: { ...state.run, ...action.patch } };
+      const interrupted =
+        action.patch.status === "cancelled" || action.patch.status === "error";
+      const activities = interrupted
+        ? state.activities.map((activity) => {
+            if (activity.kind !== "todo" || activity.status !== "running") return activity;
+            const detail = activity.detail as {
+              items?: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>;
+              completed?: number;
+              total?: number;
+            } | undefined;
+            if (!detail?.items) return activity;
+            const items = detail.items.map((item) =>
+              item.status === "in_progress" ? { ...item, status: "pending" as const } : item,
+            );
+            const completed = items.filter((item) => item.status === "completed").length;
+            return {
+              ...activity,
+              status: action.patch.status === "error" ? "failed" as const : "cancelled" as const,
+              subtitle: `${action.patch.status === "error" ? "执行中断" : "已取消"}，可继续（${completed}/${items.length} 已完成）`,
+              endedAt: Date.now(),
+              detail: { ...detail, items, completed, total: items.length },
+            };
+          })
+        : state.activities;
+      const status = action.patch.status ?? state.run.status;
+      const isTerminal = status === "completed" || status === "cancelled" || status === "error";
+      const startsNewRun = status === "running" &&
+        (state.run.status === "idle" || state.run.status === "completed" || state.run.status === "cancelled" || state.run.status === "error");
+      const startedAt = startsNewRun
+        ? action.patch.startedAt ?? Date.now()
+        : action.patch.startedAt ?? state.run.startedAt;
+      const endedAt = isTerminal ? action.patch.endedAt ?? Date.now() : action.patch.endedAt;
+      const durationMs = action.patch.durationMs ?? (startedAt !== undefined && endedAt !== undefined
+        ? Math.max(0, endedAt - startedAt)
+        : undefined);
+      const run = {
+        ...state.run,
+        ...action.patch,
+        startedAt,
+        endedAt: startsNewRun ? undefined : endedAt,
+        durationMs: startsNewRun ? undefined : durationMs,
+      };
+      const finalRunId = action.patch.runId ?? state.run.runId;
+      if (status === "completed" && finalRunId && endedAt !== undefined && durationMs !== undefined) {
+        let finalMessageIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index];
+          if (message?.role === "assistant" && message.runId === finalRunId) {
+            finalMessageIndex = index;
+            break;
+          }
+        }
+        if (finalMessageIndex >= 0) {
+          messages = messages.map((message, index) => index === finalMessageIndex
+            ? { ...message, runEndedAt: endedAt, runDurationMs: durationMs }
+            : message);
+        }
+      }
+      return { ...state, messages, activities, run };
     }
 
     case "setDecision":
@@ -617,6 +718,8 @@ export function buildRunParameters(
     effort: "low" | "medium" | "high";
     /** 左侧树选中的工作区目录；服务端会校验它确实在工作区之内。 */
     workspaceRoot?: string;
+    /** 本次运行采用的权限审批模式。 */
+    permissionMode?: PermissionMode;
   },
   resume?: Array<{ interruptId: string; status: "resolved" | "cancelled"; payload?: unknown }>,
 ): RunAgentParameters {
@@ -632,6 +735,7 @@ export function buildRunParameters(
       modelId: typeof forced === "string" && forced.length > 0 ? forced : options.modelId,
       effort: options.effort,
       workspaceRoot: options.workspaceRoot,
+      permissionMode: options.permissionMode ?? DEFAULT_PERMISSION_MODE,
     },
     ...(resume && resume.length > 0 ? { resume } : {}),
   };

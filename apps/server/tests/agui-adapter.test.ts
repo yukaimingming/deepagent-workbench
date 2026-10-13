@@ -7,7 +7,7 @@
  * - 工具调用开始/完成/失败三态
  * - 子 Agent 事件
  * - 人工审批中断
- * - 原始思维链不外发
+ * - 模型 reasoning 增量原样流式发出
  */
 
 import { describe, expect, it } from "vitest";
@@ -17,7 +17,13 @@ import type { DeepAgentRunStream } from "deepagents";
 
 /** 构造一个可驱动的假 DeepAgentRunStream。 */
 function makeFakeRun(options: {
-  messages?: Array<{ text: string[]; reasoning?: string[] }>;
+  messages?: Array<{
+    text?: string[];
+    outputText?: string;
+    reasoning?: string[];
+    reasoningGate?: Promise<void>;
+    textGate?: Promise<void>;
+  }>;
   toolCalls?: Array<{
     callId: string;
     name: string;
@@ -43,13 +49,30 @@ function makeFakeRun(options: {
           yield {
             namespace: [],
             node: "model",
-            text: {
-              async *[Symbol.asyncIterator]() {
-                for (const chunk of message.text) yield chunk;
-              },
+            async *[Symbol.asyncIterator]() {
+              await message.reasoningGate;
+              for (const reasoning of message.reasoning ?? []) {
+                yield {
+                  event: "content-block-delta",
+                  index: 0,
+                  delta: { type: "reasoning-delta", reasoning },
+                };
+              }
+              for (const [index, text] of (message.text ?? []).entries()) {
+                if (index === 1) await message.textGate;
+                yield {
+                  event: "content-block-delta",
+                  index: 1,
+                  delta: { type: "text-delta", text },
+                };
+              }
             },
+            ...(message.outputText !== undefined
+              ? { output: Promise.resolve({ content: message.outputText }) }
+              : {}),
             reasoning: {
               async *[Symbol.asyncIterator]() {
+                await message.reasoningGate;
                 for (const chunk of message.reasoning ?? []) yield chunk;
               },
             },
@@ -144,7 +167,10 @@ interface Harness {
   input: { threadId: string; runId: string };
 }
 
-function createHarness(runOptions: Parameters<typeof makeFakeRun>[0]): Harness {
+function createHarness(
+  runOptions: Parameters<typeof makeFakeRun>[0],
+  resume?: Array<{ interruptId: string; status: "resolved"; payload?: unknown }>,
+): Harness {
   const events: BaseEvent[] = [];
   let counter = 0;
   const adapter = new DeepAgentToAguiAdapter(
@@ -155,11 +181,14 @@ function createHarness(runOptions: Parameters<typeof makeFakeRun>[0]): Harness {
         messages: [],
         tools: [],
         context: [],
+        ...(resume ? { resume } : {}),
       } as never,
       newId: () => `id-${(counter += 1)}`,
       now: () => 1000 + counter,
     },
-    (event) => events.push(event),
+    (event) => {
+      events.push(event);
+    },
   );
   const run = makeFakeRun(runOptions);
   return { events, adapter, run, input: { threadId: "thread-1", runId: "run-1" } };
@@ -186,10 +215,12 @@ describe("适配器：标准事件顺序", () => {
     expect(types).toContain(EventType.TEXT_MESSAGE_END);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
 
+    // 模型原始文本事件逐段透传，完整内容与原增量一致。
     const deltas = harness.events
       .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
       .map((event) => (event as unknown as { delta: string }).delta);
-    expect(deltas).toEqual(["你好", "，世界"]);
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.join("")).toBe("你好，世界");
   });
 
   it("没有文本时不发 TEXT_MESSAGE_* 事件", async () => {
@@ -200,6 +231,89 @@ describe("适配器：标准事件顺序", () => {
     const types = harness.events.map((event) => event.type);
     expect(types).not.toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.RUN_FINISHED);
+  });
+
+  it("模型正文投影按到达顺序逐块发送，而不是等完整输出后一次发送", async () => {
+    const harness = createHarness({
+      messages: [{ text: ["正文第一段", "正文第二段"] }],
+    });
+    harness.adapter.start();
+    await harness.adapter.consumeMessages(harness.run);
+
+    const deltas = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltas).toEqual(["正文第一段", "正文第二段"]);
+  });
+
+  it("模型尚未结束生成时，正文首个原始增量已经发出", async () => {
+    let releaseSecondDelta = (): void => {};
+    const secondDeltaGate = new Promise<void>((resolve) => {
+      releaseSecondDelta = resolve;
+    });
+    const harness = createHarness({
+      messages: [{ text: ["先到的正文", "后到的正文"], textGate: secondDeltaGate }],
+    });
+    harness.adapter.start();
+    const consuming = harness.adapter.consumeMessages(harness.run);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const deltasBeforeModelFinishes = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltasBeforeModelFinishes).toEqual(["先到的正文"]);
+
+    releaseSecondDelta();
+    await consuming;
+    const deltasAfterModelFinishes = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltasAfterModelFinishes).toEqual(["先到的正文", "后到的正文"]);
+  });
+
+  it("推理流尚未结束时也立即发出正文增量", async () => {
+    let finishReasoning = (): void => {};
+    const reasoningGate = new Promise<void>((resolve) => {
+      finishReasoning = resolve;
+    });
+    const harness = createHarness({
+      messages: [{ text: ["正文第一段", "正文第二段"], reasoning: ["继续推理"], reasoningGate }],
+    });
+    harness.adapter.start();
+    const consuming = harness.adapter.consumeMessages(harness.run);
+
+    // 文本投影可在 reasoning 仍被 gate 阻塞时完成；给并发消费任务一个调度周期。
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const deltasBeforeReasoningEnds = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltasBeforeReasoningEnds).toEqual([]);
+
+    finishReasoning();
+    await consuming;
+    const types = harness.events.map((event) => event.type);
+    expect(types.indexOf(EventType.REASONING_MESSAGE_END)).toBeLessThan(
+      types.indexOf(EventType.TEXT_MESSAGE_START),
+    );
+    const deltasAfterReasoningEnds = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltasAfterReasoningEnds).toEqual(["正文第一段", "正文第二段"]);
+  });
+
+  it("审批恢复时仍把恢复后的模型正文发成 AG-UI 文本事件", async () => {
+    const harness = createHarness(
+      { messages: [{ text: ["审批后", "的总结正文"] }] },
+      [{ interruptId: "interrupt-1", status: "resolved", payload: { type: "approve" } }],
+    );
+    harness.adapter.start();
+    await harness.adapter.consumeMessages(harness.run);
+
+    const deltas = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.join("")).toBe("审批后的总结正文");
   });
 
   it("RUN_FINISHED 带 threadId 与 runId", () => {
@@ -275,6 +389,26 @@ describe("适配器：Todo 卡片幂等更新", () => {
       status: string;
     }>;
     expect(activities[0]?.status).toBe("completed");
+  });
+
+  it("正常结束时将未完成的进行中待办收回为 pending", async () => {
+    const harness = createHarness({
+      values: [{ todos: [
+        { content: "当前步骤", status: "in_progress" },
+        { content: "后续步骤", status: "pending" },
+      ] }],
+    });
+    await harness.adapter.consumeValues(harness.run);
+    harness.adapter.finish();
+    const activities = customValues(harness.events, "deepagent:activity") as Array<{
+      id: string;
+      status: string;
+      detail: { items: Array<{ status: string }>; completed: number; total: number };
+    }>;
+    const todo = activities.filter((item) => item.id === "todo:main").at(-1);
+    expect(todo?.status).toBe("pending");
+    expect(todo?.detail.items.map((item) => item.status)).toEqual(["pending", "pending"]);
+    expect(todo?.detail).toMatchObject({ completed: 0, total: 2 });
   });
 
   it("没有 todos 的状态不产生卡片", async () => {
@@ -443,34 +577,113 @@ describe("适配器：人工审批", () => {
         },
       },
     ]);
-    const activities = customValues(harness.events, "deepagent:activity") as Array<{ kind: string }>;
-    expect(activities.filter((item) => item.kind === "approval")).toHaveLength(2);
+    const activities = customValues(harness.events, "deepagent:activity") as Array<{
+      id: string;
+      kind: string;
+      detail: { toolName: string; args: Array<{ toolName: string }> };
+    }>;
+    const approvals = activities.filter((item) => item.kind === "approval");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.id).toBe("approval:int-2");
+    expect(approvals[0]?.detail.toolName).toBe("2 ???");
+    expect(approvals[0]?.detail.args.map((item) => item.toolName)).toEqual([
+      "write_file",
+      "delete_file",
+    ]);
+
+    const snapshots = customValues(harness.events, "deepagent:run-snapshot") as Array<{
+      interrupts: Array<{ id: string }>;
+    }>;
+    expect(snapshots.at(-1)?.interrupts).toHaveLength(1);
+    expect(snapshots.at(-1)?.interrupts[0]?.id).toBe("int-2");
+  });
+
+  it("Inspect attachmentsInspect attachmentsInspect attachmentsInspect attachments", () => {
+    const harness = createHarness({});
+    harness.adapter.emitInterrupts([
+      {
+        interruptId: "int-a",
+        payload: {
+          actionRequests: [
+            { name: "execute", args: { command: "ls" } },
+            { name: "execute", args: { command: "find ." } },
+          ],
+        },
+      },
+      {
+        interruptId: "int-b",
+        payload: {
+          actionRequests: [
+            { name: "write_file", args: { file_path: "/a.txt" } },
+            { name: "edit_file", args: { file_path: "/b.txt" } },
+          ],
+        },
+      },
+    ]);
+
+    const snapshots = customValues(harness.events, "deepagent:run-snapshot") as Array<{
+      interrupts: Array<{ id: string }>;
+    }>;
+    expect(snapshots.at(-1)?.interrupts.map((item) => item.id)).toEqual(["int-a", "int-b"]);
+  });
+
+  it("相同 interruptId 重复出现时只生成一项决策", () => {
+    const harness = createHarness({});
+    const duplicate = {
+      interruptId: "duplicate-int",
+      payload: {
+        actionRequests: [{ name: "execute", args: { command: "pwd" } }],
+      },
+    };
+    harness.adapter.emitInterrupts([duplicate, duplicate]);
+
+    const snapshots = customValues(harness.events, "deepagent:run-snapshot") as Array<{
+      interrupts: Array<{ id: string }>;
+    }>;
+    const activities = customValues(harness.events, "deepagent:activity") as Array<{
+      id: string;
+      kind: string;
+    }>;
+    expect(snapshots.at(-1)?.interrupts.map(({ id }) => id)).toEqual(["duplicate-int"]);
+    expect(activities.filter(({ kind }) => kind === "approval").map(({ id }) => id)).toEqual([
+      "approval:duplicate-int",
+    ]);
   });
 });
 
-describe("适配器：思维链不外发", () => {
-  it("reasoning 原文不出现在任何事件里", async () => {
+describe("适配器：模型 reasoning 内容保真", () => {
+  it("reasoning 按模型原始增量逐块原样发出", async () => {
+    const rawChunks = [
+      "  Let me inspect the files.",
+      " Let me inspect the files.",
+      "\n原样保留标点和换行。  ",
+    ];
     const harness = createHarness({
-      messages: [{ text: ["最终答复"], reasoning: ["这是隐藏的思维链内容 SECRET"] }],
+      messages: [{
+        text: ["最终答复"],
+        reasoning: rawChunks,
+      }],
     });
     harness.adapter.start();
     await harness.adapter.consumeMessages(harness.run);
     harness.adapter.finish();
-    const serialized = JSON.stringify(harness.events);
-    expect(serialized).not.toContain("SECRET");
-    expect(serialized).not.toContain("隐藏的思维链");
+    const deltas = harness.events
+      .filter((event) => event.type === EventType.REASONING_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltas).toEqual(rawChunks);
+    expect(deltas.join("")).toBe(rawChunks.join(""));
   });
 
-  it("有 reasoning 时进度摘要只说正在整理思路", async () => {
+  it("有 reasoning 时运行快照标记模型推理状态", async () => {
     const harness = createHarness({
-      messages: [{ text: ["答复"], reasoning: ["一些内部推理"] }],
+      messages: [{ text: ["答复"], reasoning: ["I should verify the result"] }],
     });
     await harness.adapter.consumeMessages(harness.run);
     const snapshots = customValues(harness.events, "deepagent:run-snapshot") as Array<{
       progressNote: string | null;
     }>;
     const notes = snapshots.map((item) => item.progressNote).filter(Boolean);
-    expect(notes).toContain("正在整理思路");
+    expect(notes).toContain("模型推理中");
   });
 });
 
@@ -492,5 +705,61 @@ describe("AG-UI 消息转换", () => {
   it("content 非字符串时降级为空串", () => {
     const result = aguiMessagesToLangChain([{ id: "1", role: "user", content: undefined }] as never);
     expect(result).toEqual([{ role: "user", content: "" }]);
+  });
+
+  it("AG-UI multimodal message conversion", () => {
+    const result = aguiMessagesToLangChain([{
+      id: "1",
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect attachments" },
+        { type: "image", source: { type: "data", value: "aW1hZ2U=", mimeType: "image/png" }, metadata: { filename: "chart.png" } },
+        { type: "document", source: { type: "data", value: "eyJvayI6dHJ1ZX0=", mimeType: "application/json" }, metadata: { filename: "data.json" } },
+        { type: "document", source: { type: "data", value: "JVBERi0x", mimeType: "application/pdf" }, metadata: { filename: "report.pdf" } },
+      ],
+    }] as never);
+
+    expect(result).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect attachments" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png", metadata: { filename: "chart.png" } },
+        { type: "text", text: "Attachment data.json:\n{\"ok\":true}" },
+        { type: "file", data: "JVBERi0x", mimeType: "application/pdf", metadata: { filename: "report.pdf" } },
+      ],
+    }]);
+  });
+
+  it("OpenAI 兼容模型使用其原生图片输入格式", () => {
+    const result = aguiMessagesToLangChain([{
+      id: "1",
+      role: "user",
+      content: [
+        { type: "text", text: "Read this image" },
+        { type: "image", source: { type: "data", value: "aW1hZ2U=", mimeType: "image/png" } },
+      ],
+    }] as never, true);
+
+    expect(result).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "Read this image" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+      ],
+    }]);
+  });
+});
+
+describe("适配器兜底正文不模拟流式", () => {
+  it("模型未提供正文流时以单个完整增量发送兜底正文", async () => {
+    const fullText = "完整兜底正文不伪装成分词增量";
+    const harness = createHarness({ messages: [{ outputText: fullText }] });
+    harness.adapter.start();
+    await harness.adapter.consumeMessages(harness.run);
+
+    const deltas = harness.events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as unknown as { delta: string }).delta);
+    expect(deltas).toEqual([fullText]);
   });
 });

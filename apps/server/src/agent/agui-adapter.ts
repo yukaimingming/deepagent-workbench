@@ -13,8 +13,8 @@
  *   RUN_FINISHED（可能带 interrupt outcome）
  *   RUN_ERROR（失败时）
  *
- * 安全约束：原始隐藏思维链一律不外发。`run.messages` 的 `.reasoning`
- * 只用于生成一句公开进度摘要，内容本身不透传。
+ * 推理内容：`run.messages` 的 `.reasoning` 增量通过 AG-UI reasoning 事件
+ * 原样流式发送，不改写、不去重、不补充文本。
  */
 
 import {
@@ -26,15 +26,22 @@ import {
 } from "@ag-ui/core";
 import type { DeepAgentRunStream } from "deepagents";
 import { Command } from "@langchain/langgraph";
+import type { ContentBlock } from "@langchain/core/messages";
 import type { Decision } from "langchain";
 import {
   AGUI_CUSTOM_EVENT,
+  computeFileDiff,
+  resolveContextWindow,
   safeStringify,
   type Activity,
   type ApprovalDetail,
+  type FileDetail,
   type RunSnapshot,
+  type RunTokenUsage,
   type ToolDetail,
+  type TodoDetail,
 } from "@deepagent/shared";
+import type { FileDiffRecorder } from "./create-agent.js";
 
 /** 适配器依赖注入的运行上下文。 */
 export interface AdapterContext {
@@ -43,6 +50,8 @@ export interface AdapterContext {
   newId: () => string;
   /** 当前时间（毫秒）。 */
   now: () => number;
+  /** 文件变更记录器：提供时为文件卡片附加前后内容 Diff。 */
+  diffRecorder?: FileDiffRecorder;
 }
 
 /** 适配器输出：异步迭代 AG-UI 事件。 */
@@ -57,6 +66,8 @@ const FILE_TOOLS: Record<string, "read" | "write" | "edit" | "delete" | "list" |
   write_file: "write",
   edit_file: "edit",
   delete_file: "delete",
+  // deepagents 1.14 内置删除工具的实际名称是 `delete`（见 create-agent.ts 说明）。
+  delete: "delete",
   ls: "list",
   glob: "glob",
   grep: "grep",
@@ -72,17 +83,44 @@ export class DeepAgentToAguiAdapter {
   private readonly ctx: AdapterContext;
   private readonly sink: EventSink;
   private readonly activities = new Map<string, Activity>();
-  private readonly messageId: string;
-  private startedText = false;
   private started = false;
   private finished = false;
   private readonly seenToolCalls = new Set<string>();
+  /** 从状态快照识别到、等待工具结果的调用。 */
+  private readonly pendingValueToolCalls = new Map<string, {
+    name: string;
+    input: unknown;
+    startedAt: number;
+    fileOperation?: (typeof FILE_TOOLS)[string];
+  }>();
   private readonly seenSubagents = new Set<string>();
+  /** 最近一次 emitInterrupts 记录的中断（供 RUN_FINISHED 的 interrupt outcome 使用）。 */
+  private pendingInterrupts: Array<{ id: string; reason: string }> = [];
+  /** resume 运行中最后一次平滑重播的文本（用于结束时对账补发缺失的总结）。 */
+  private lastResumeText = "";
+  /** 当前是否为审批续跑运行。 */
+  private isResumeRun = false;
+  /** 累计的 Token 用量（来自各轮模型消息的 usage_metadata）。 */
+  private usage: RunTokenUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cachedInputTokens: 0,
+    lastInputTokens: 0,
+    contextWindow: null,
+  };
 
   constructor(ctx: AdapterContext, sink: EventSink) {
     this.ctx = ctx;
     this.sink = sink;
-    this.messageId = ctx.newId();
+    // 上下文窗口优先取请求里选中的模型；模型消息里的 model_name 可再补。
+    const props = (ctx.input.forwardedProps ?? {}) as { modelId?: unknown };
+    if (typeof props.modelId === "string") {
+      this.usage.contextWindow = resolveContextWindow(props.modelId);
+    }
+    // 审批恢复是一次新的 AG-UI 请求；LangGraph 可能只重放中断后的状态，
+    // 因此正文以流式投影和最终状态对账两种方式补齐。
+    this.isResumeRun = (ctx.input.resume?.length ?? 0) > 0;
 
     // 预收集本轮执行前，历史消息中已经存在的所有 tool_call ID，
     // 彻底杜绝把历史轮次的工具调用重放到当前轮次！
@@ -113,222 +151,157 @@ export class DeepAgentToAguiAdapter {
   }
 
   /**
-   * 消费模型消息流。
-   *
-   * 输出顺序刻意安排为「先思考、后答复」：
-   *   1. reasoning 增量 → 独立 messageId 的 REASONING_MESSAGE_* 事件，
-   *      前端用 AI Elements 的 <Reasoning> 流式展开。
-   *   2. reasoning 结束后才发 TEXT_MESSAGE_*，即正文在思考面板收起后才开始流式输出。
-   *
-   * 安全边界：这里外发的是经 `sanitizeReasoning` 过滤后的公开进度摘要，
-   * 不是模型原始隐藏思维链。
+   * 按 LangChain 原始模型事件的到达顺序适配 AG-UI。
+   * 思考增量写入详细过程，正文增量直接写入回答区；模型提供的推理文本逐块原样转发。
    */
   async consumeMessages(run: DeepAgentRunStream): Promise<void> {
-    const reasoningId = this.ctx.newId();
-    let reasoningStarted = false;
-
     for await (const message of run.messages) {
-      // 1. 流式输出本轮思考：所有轮次的思考全部汇聚进同一个 reasoningId
-      for await (const chunk of message.reasoning) {
-        const contentDelta = sanitizeReasoningContent(chunk);
-        if (contentDelta.length === 0) continue;
-        if (!reasoningStarted) {
-          reasoningStarted = true;
-          this.emit({
-            type: EventType.REASONING_MESSAGE_START,
-            messageId: reasoningId,
-            role: "reasoning",
-            timestamp: this.ctx.now(),
-          });
-        }
-        this.emit({
-          type: EventType.REASONING_MESSAGE_CONTENT,
-          messageId: reasoningId,
-          delta: contentDelta,
-          timestamp: this.ctx.now(),
-        });
-        // 保持平滑可见的视觉打字机节奏
-        await new Promise((resolve) => setTimeout(resolve, 35));
-      }
+      let reasoningId: string | null = null;
+      let textId: string | null = null;
+      let reasoningOpen = false;
+      let textStarted = false;
+      let streamedText = '';
 
-      // 2. 检查当前消息是否携带工具调用
-      // 通过当前 message 的完整 AIMessage 组装结果精准判定
-      let hasToolCalls = false;
-      let fullMessageText = "";
-
-      try {
-        const maybePromise =
-          typeof (message as { output?: PromiseLike<unknown> }).output !== "undefined"
-            ? (message as { output: PromiseLike<unknown> }).output
-            : message;
-        const aiMsg = (await Promise.resolve(maybePromise)) as {
-          tool_calls?: unknown[];
-          content?: unknown;
-          additional_kwargs?: { tool_calls?: unknown[] };
-        } | null;
-
-        if (
-          (Array.isArray(aiMsg?.tool_calls) && aiMsg.tool_calls.length > 0) ||
-          (Array.isArray(aiMsg?.additional_kwargs?.tool_calls) &&
-            aiMsg.additional_kwargs.tool_calls.length > 0)
-        ) {
-          hasToolCalls = true;
-        }
-
-        if (typeof aiMsg?.content === "string") {
-          fullMessageText = aiMsg.content;
-        } else if (Array.isArray(aiMsg?.content)) {
-          fullMessageText = (aiMsg.content as Array<{ text?: string }>)
-            .map((c) => c.text || "")
-            .join("");
-        }
-      } catch {
-        // 若获取 AIMessage 失败，回退到迭代检测
-        const tcIterable = (message as { toolCalls?: AsyncIterable<unknown> }).toolCalls;
-        if (tcIterable && typeof tcIterable[Symbol.asyncIterator] === "function") {
-          for await (const _ of tcIterable) {
-            hasToolCalls = true;
-            break;
-          }
-        }
-      }
-
-      // 如果当前消息发起了工具调用：这是中间执行节点，其中间过渡碎句绝不作为正式正文外发，且思考流保持活跃未完结
-      if (hasToolCalls) {
-        continue;
-      }
-
-      // 如果没有实质文本内容，不作为最终答复
-      if (!fullMessageText.trim()) {
-        continue;
-      }
-
-      // 3. 当前消息没有工具调用且有实质答复：这是真正面向用户的最终答复轮次！
-      // 此时思考已全部完成：先发出唯一的 REASONING_MESSAGE_END，正式宣告思考完全结束并收起折叠！
-      if (reasoningStarted) {
+      const endReasoning = (): void => {
+        if (!reasoningId || !reasoningOpen) return;
         this.emit({
           type: EventType.REASONING_MESSAGE_END,
           messageId: reasoningId,
           timestamp: this.ctx.now(),
         });
-        reasoningStarted = false;
-      }
+        reasoningOpen = false;
+      };
 
-      // 紧接着一气呵成地流式输出最终正式答复，彻底消除中途打断与反复横跳！
-      if (!this.startedText) {
-        this.startedText = true;
+      const emitReasoning = (delta: string): void => {
+        if (!delta) return;
+        if (!reasoningOpen) {
+          reasoningId = this.ctx.newId();
+          reasoningOpen = true;
+          this.emit({
+            type: EventType.REASONING_MESSAGE_START,
+            messageId: reasoningId,
+            role: 'reasoning',
+            timestamp: this.ctx.now(),
+          });
+          this.emitSnapshot({ status: 'running', progressNote: '模型推理中' });
+        }
         this.emit({
-          type: EventType.TEXT_MESSAGE_START,
-          messageId: this.messageId,
-          role: "assistant",
+          type: EventType.REASONING_MESSAGE_CONTENT,
+          messageId: reasoningId,
+          delta,
           timestamp: this.ctx.now(),
         });
-      }
+      };
 
-      // 将最终文本以流畅的打字机节拍流式推送到前端
-      // 每次 4 个字符，间隔 18ms，视觉体验极度丝滑
-      const chunkSize = 4;
-      for (let i = 0; i < fullMessageText.length; i += chunkSize) {
-        const slice = fullMessageText.slice(i, i + chunkSize);
+      const emitText = (delta: string): void => {
+        if (!delta) return;
+        endReasoning();
+        if (!textStarted) {
+          textStarted = true;
+          textId = this.ctx.newId();
+          this.emit({
+            type: EventType.TEXT_MESSAGE_START,
+            messageId: textId,
+            role: 'assistant',
+            timestamp: this.ctx.now(),
+          });
+        }
+        streamedText += delta;
         this.emit({
           type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: this.messageId,
-          delta: slice,
+          messageId: textId,
+          delta,
           timestamp: this.ctx.now(),
         });
-        await new Promise((resolve) => setTimeout(resolve, 18));
+      };
+
+      // ChatModelStream 可重放同一条有序事件流；消费原始事件才能保留
+      // reasoning 与正文的相对顺序，避免并发读取两个投影后再缓冲重排。
+      for await (const event of message) {
+        const raw = event as unknown as {
+          event: string;
+          message?: string;
+          delta?: { type?: string; text?: string; reasoning?: string };
+          content?: { type?: string; text?: string; reasoning?: string; thinking?: string };
+        };
+        if (raw.event === 'error') throw new Error(raw.message || '模型流发生错误');
+        if (raw.event !== 'content-block-delta') continue;
+
+        if (raw.delta?.type === 'reasoning-delta' && typeof raw.delta.reasoning === 'string') {
+          emitReasoning(raw.delta.reasoning);
+        } else if (raw.delta?.type === 'text-delta' && typeof raw.delta.text === 'string') {
+          emitText(raw.delta.text);
+        } else if (!raw.delta && raw.content?.type === 'reasoning' && typeof raw.content.reasoning === 'string') {
+          emitReasoning(raw.content.reasoning);
+        } else if (!raw.delta && raw.content?.type === 'thinking' && typeof raw.content.thinking === 'string') {
+          emitReasoning(raw.content.thinking);
+        } else if (!raw.delta && raw.content?.type === 'text' && typeof raw.content.text === 'string') {
+          emitText(raw.content.text);
+        }
+      }
+      endReasoning();
+
+      let fullMessageText = '';
+      try {
+        const maybePromise =
+          typeof (message as { output?: PromiseLike<unknown> }).output !== 'undefined'
+            ? (message as { output: PromiseLike<unknown> }).output
+            : message;
+        const aiMsg = (await Promise.resolve(maybePromise)) as {
+          content?: unknown;
+          usage_metadata?: {
+            input_tokens?: number;
+            output_tokens?: number;
+            total_tokens?: number;
+            input_token_details?: { cache_read?: number; cache_creation?: number };
+          } | null;
+          response_metadata?: { model_name?: string } | null;
+        } | null;
+        this.recordUsage(aiMsg);
+        if (typeof aiMsg?.content === 'string') {
+          fullMessageText = aiMsg.content;
+        } else if (Array.isArray(aiMsg?.content)) {
+          fullMessageText = (aiMsg.content as Array<{ text?: string }>)
+            .map((content) => content.text || '')
+            .join('');
+        }
+      } catch {
+        // 无法取得最终消息时保留已实时发送的原始增量，不重播正文。
+      }
+
+      if (this.isResumeRun) this.lastResumeText = streamedText || fullMessageText;
+      if (!textStarted && fullMessageText.trim()) {
+        // 只有底层未给正文增量时才以完整消息兜底一次。
+        emitText(fullMessageText);
+        if (this.isResumeRun) this.lastResumeText = fullMessageText;
+      }
+      if (textId) {
+        this.emit({
+          type: EventType.TEXT_MESSAGE_END,
+          messageId: textId,
+          timestamp: this.ctx.now(),
+        });
       }
     }
-
-    // 兜底保障：若运行结束前有思考且尚未发过 END，补发 END
-    if (reasoningStarted) {
-      this.emit({
-        type: EventType.REASONING_MESSAGE_END,
-        messageId: reasoningId,
-        timestamp: this.ctx.now(),
-      });
-    }
-
-    if (this.startedText) {
-      this.emit({
-        type: EventType.TEXT_MESSAGE_END,
-        messageId: this.messageId,
-        timestamp: this.ctx.now(),
-      });
-    }
   }
-
-
-
   /** 消费工具调用流：映射为工具卡片与文件卡片。 */
   async consumeToolCalls(run: DeepAgentRunStream): Promise<void> {
     for await (const call of run.toolCalls) {
-      const key = `${call.callId}`;
-      if (this.seenToolCalls.has(key)) continue;
-      this.seenToolCalls.add(key);
-
-      const startedAt = this.ctx.now();
-      const fileOperation = FILE_TOOLS[call.name];
-      if (fileOperation) {
-        this.upsertActivity({
-          id: `file:${call.callId}`,
-          kind: "file",
-          status: "running",
-          title: `${fileOperation} · ${call.name}`,
-          subtitle: describePath(call.input),
-          detail: { path: describePath(call.input), operation: fileOperation },
-          startedAt,
-        });
-      }
-
-      this.upsertActivity({
-        id: `tool:${call.callId}`,
-        kind: "tool",
-        status: "running",
-        title: call.name,
-        subtitle: "执行中",
-        detail: { toolName: call.name, input: call.input } satisfies ToolDetail,
-        startedAt,
-      });
+      const startedAt = this.startToolActivity(call.callId, call.name, call.input);
+      if (startedAt === null) continue;
 
       const status = await call.status;
       const output = status === "error" ? undefined : await safeAwait(call.output);
       const error = status === "error" ? await safeAwait(call.error) : undefined;
-      const endedAt = this.ctx.now();
-      const outputText = safeStringify(output);
-
-      this.upsertActivity({
-        id: `tool:${call.callId}`,
-        kind: "tool",
-        status: status === "error" ? "failed" : "completed",
-        title: call.name,
-        subtitle: status === "error" ? "失败" : "完成",
-        detail: {
-          toolName: call.name,
-          input: call.input,
-          output: outputText.text,
-          truncated: outputText.truncated,
-        } satisfies ToolDetail,
+      this.finishToolActivity(
+        call.callId,
+        call.name,
+        call.input,
         startedAt,
-        endedAt,
-        durationMs: endedAt - startedAt,
-        ...(error ? { error } : {}),
-      });
-
-      if (fileOperation) {
-        this.upsertActivity({
-          id: `file:${call.callId}`,
-          kind: "file",
-          status: status === "error" ? "failed" : "completed",
-          title: `${fileOperation} · ${call.name}`,
-          subtitle: describePath(call.input),
-          detail: { path: describePath(call.input), operation: fileOperation },
-          startedAt,
-          endedAt,
-          durationMs: endedAt - startedAt,
-          ...(error ? { error } : {}),
-        });
-      }
+        output,
+        status === "error" ? "error" : "finished",
+        error,
+      );
     }
   }
 
@@ -414,8 +387,6 @@ export class DeepAgentToAguiAdapter {
    */
   async consumeValues(run: DeepAgentRunStream): Promise<void> {
     let lastTodoSignature = "";
-    /** 已发过卡片的 tool_call id，避免重复。 */
-    const _seenCalls = new Set<string>();
 
     for await (const values of run.values) {
       if (process.env.DEEPAGENT_DEBUG_VALUES === "1") {
@@ -430,6 +401,39 @@ export class DeepAgentToAguiAdapter {
           }
         }
       }
+      const stateMessages = extractStateMessages(values);
+      for (const message of stateMessages) {
+        for (const call of extractStateToolCalls(message)) {
+          const startedAt = this.startToolActivity(call.id, call.name, call.input)
+            ?? (this.activities.get(`tool:${call.id}`)?.status === "running"
+              ? this.activities.get(`tool:${call.id}`)!.startedAt
+              : null);
+          if (startedAt === null) continue;
+          this.pendingValueToolCalls.set(call.id, {
+            name: call.name,
+            input: call.input,
+            startedAt,
+            ...(FILE_TOOLS[call.name] ? { fileOperation: FILE_TOOLS[call.name] } : {}),
+          });
+        }
+      }
+      for (const message of stateMessages) {
+        const result = extractStateToolResult(message);
+        if (!result) continue;
+        const pending = this.pendingValueToolCalls.get(result.callId);
+        if (!pending) continue;
+        this.pendingValueToolCalls.delete(result.callId);
+        this.finishToolActivity(
+          result.callId,
+          pending.name,
+          pending.input,
+          pending.startedAt,
+          result.output,
+          result.status,
+          result.error,
+        );
+      }
+
       const todos = extractTodos(values);
       if (todos) {
         const signature = JSON.stringify(todos);
@@ -448,51 +452,78 @@ export class DeepAgentToAguiAdapter {
         }
       }
 
-      // values 仅用于同步 Todo 待办计划任务；
-      // 工具调用由 consumeToolCalls 统一单源消费，杜绝双发导致出现重复卡片！
+      // 状态快照提供工具调用的及时起始/结果状态；run.toolCalls 若也产出相同调用，
+      // 会被 seenToolCalls 去重，不会重复创建卡片。
     }
   }
 
   /** 把人工审批中断转为审批卡片。 */
   emitInterrupts(interrupts: readonly { interruptId: string; payload: unknown }[]): void {
     const runInterrupts: RunSnapshot["interrupts"] = [];
+    const seenInterruptIds = new Set<string>();
     for (const interrupt of interrupts) {
+      // Deep Agents 的嵌套工具流可能重复带回相同 interrupt；一个中断只对应一组决策。
+      if (seenInterruptIds.has(interrupt.interruptId)) continue;
+      seenInterruptIds.add(interrupt.interruptId);
       const request = interrupt.payload as {
         actionRequests?: Array<{ name: string; args: Record<string, unknown>; description?: string }>;
         reviewConfigs?: Array<{ actionName: string; allowedDecisions: string[]; argsSchema?: Record<string, unknown> }>;
       };
       const actions = request.actionRequests ?? [];
-      for (const [index, action] of actions.entries()) {
-        const review = request.reviewConfigs?.[index];
-        const allowed = (review?.allowedDecisions ?? ["approve", "reject"]).filter(
-          (value): value is "approve" | "edit" | "reject" =>
-            value === "approve" || value === "edit" || value === "reject",
-        );
-        this.upsertActivity({
-          id: `approval:${interrupt.interruptId}:${index}`,
-          kind: "approval",
-          status: "waiting_approval",
-          title: `待审批 · ${action.name}`,
-          subtitle: action.description ?? "该操作需要你确认后才会执行",
-          detail: {
-            toolName: action.name,
-            args: action.args,
-            impact: describeImpact(action.name, action.args),
-            allowedDecisions: allowed.length > 0 ? allowed : ["approve", "reject"],
-          } satisfies ApprovalDetail,
-          startedAt: this.activityStartedAt(`approval:${interrupt.interruptId}:${index}`),
-        });
-        runInterrupts.push({
-          id: `${interrupt.interruptId}:${index}`,
-          reason: "tool_approval",
-          message: action.description ?? `是否允许执行 ${action.name}？`,
-          toolName: action.name,
-          args: action.args,
-          allowedDecisions: allowed.length > 0 ? allowed : ["approve", "reject"],
-        });
-      }
+      if (actions.length === 0) continue;
+      const actionReviews = actions.map((action, index) => ({
+        action,
+        review: request.reviewConfigs?.[index],
+      }));
+      const allowed = actionReviews.reduce<ApprovalDetail["allowedDecisions"]>(
+        (shared, { review }) => {
+          const decisions = (review?.allowedDecisions ?? ["approve", "reject"]).filter(
+            (value): value is "approve" | "edit" | "reject" =>
+              value === "approve" || value === "edit" || value === "reject",
+          );
+          return shared.filter((decision) => decisions.includes(decision));
+        },
+        ["approve", "reject"],
+      );
+      const toolName = actions.length === 1 ? actions[0]!.name : `${actions.length} ???`;
+      const args = actions.length === 1
+        ? actions[0]!.args
+        : actions.map((action) => ({ toolName: action.name, args: action.args, description: action.description }));
+      const impact = actionReviews
+        .map(({ action }, index) => `${index + 1}. ${describeImpact(action.name, action.args)}`)
+        .join("\n");
+      const message = actionReviews
+        .map(({ action }) => action.description ?? `?????? ${action.name}?`)
+        .join("?");
+      const allowedDecisions: ApprovalDetail["allowedDecisions"] =
+        allowed.length > 0 ? allowed : ["approve", "reject"];
+
+      // ?? LangGraph interrupt ??????????????????????????????
+      this.upsertActivity({
+        id: `approval:${interrupt.interruptId}`,
+        kind: "approval",
+        status: "waiting_approval",
+        title: `?????${toolName}`,
+        subtitle: message,
+        detail: { toolName, args, impact, allowedDecisions } satisfies ApprovalDetail,
+        startedAt: this.activityStartedAt(`approval:${interrupt.interruptId}`),
+      });
+      runInterrupts.push({
+        id: interrupt.interruptId,
+        reason: "tool_approval",
+        message,
+        toolName,
+        args,
+        allowedDecisions,
+      });
     }
-    this.emitSnapshot({ status: "waiting_approval", interrupts: runInterrupts, progressNote: "等待人工审批" });
+    this.pendingInterrupts = runInterrupts.map(({ id, reason }) => ({ id, reason }));
+    this.emitSnapshot({
+      status: "waiting_approval",
+      interrupts: runInterrupts,
+      progressNote: "等待人工审批",
+      usage: this.usage,
+    });
   }
 
   /** 发出错误事件并结束。 */
@@ -519,13 +550,117 @@ export class DeepAgentToAguiAdapter {
     });
   }
 
+  /** 汇总一条模型消息的 Token 用量（缓存命中单独累计）。 */
+  private recordUsage(
+    aiMsg: {
+      usage_metadata?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        total_tokens?: number;
+        input_token_details?: { cache_read?: number; cache_creation?: number };
+      } | null;
+      response_metadata?: { model_name?: string } | null;
+    } | null,
+  ): void {
+    const usage = aiMsg?.usage_metadata;
+    if (!usage) return;
+    const input = Math.max(0, usage.input_tokens ?? 0);
+    const output = Math.max(0, usage.output_tokens ?? 0);
+    this.usage.inputTokens += input;
+    this.usage.outputTokens += output;
+    this.usage.totalTokens += Math.max(0, usage.total_tokens ?? input + output);
+    this.usage.cachedInputTokens += Math.max(0, usage.input_token_details?.cache_read ?? 0);
+    // 最后一次模型调用的输入量最接近当前上下文占用。
+    this.usage.lastInputTokens = input;
+    if (!this.usage.contextWindow) {
+      this.usage.contextWindow = resolveContextWindow(aiMsg?.response_metadata?.model_name);
+    }
+  }
+
+  /**
+   * resume 运行收尾对账：中断恢复重放不保证最后的总结文本通过流式事件
+   * 完整发出（间歇性丢失）。这里用 LangGraph 最终状态里最后一条 AI 消息
+   * 与已推送内容比对，缺失时平滑补发，确保总结正文一定渲染。
+   */
+  async reconcileResumeSummary(finalMessages: unknown): Promise<void> {
+    if (!this.isResumeRun || this.finished) return;
+    if (!Array.isArray(finalMessages) || finalMessages.length === 0) return;
+    for (let i = finalMessages.length - 1; i >= 0; i--) {
+      const msg = finalMessages[i] as {
+        role?: string;
+        getType?: () => string;
+        content?: unknown;
+        tool_calls?: unknown[];
+        additional_kwargs?: { tool_calls?: unknown[] };
+      } | null;
+      const type = msg?.getType?.() ?? msg?.role;
+      if (type !== "ai" && type !== "assistant") continue;
+      // 跳过带工具调用的 AI 消息（它们不是总结文本）。
+      if (
+        (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) ||
+        (Array.isArray(msg?.additional_kwargs?.tool_calls) && msg.additional_kwargs.tool_calls.length > 0)
+      ) {
+        continue;
+      }
+      let text = "";
+      if (typeof msg?.content === "string") {
+        text = msg.content;
+      } else if (Array.isArray(msg?.content)) {
+        text = (msg.content as Array<{ type?: string; text?: string }>)
+          .filter((c) => !c.type || c.type === "text")
+          .map((c) => c.text || "")
+          .join("");
+      }
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (trimmed === this.lastResumeText.trim()) return;
+      // 恢复流没有提供可补齐的原始增量时，只发送一次完整状态文本，不模拟逐字流式。
+      const textId = this.ctx.newId();
+      this.emit({
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: textId,
+        role: "assistant",
+        timestamp: this.ctx.now(),
+      });
+      this.emit({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: textId,
+        delta: text,
+        timestamp: this.ctx.now(),
+      });
+      this.emit({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: textId,
+        timestamp: this.ctx.now(),
+      });
+      this.lastResumeText = text;
+      return;
+    }
+  }
+
   /** 发出成功结束事件。 */
   finish(): void {
     if (this.finished) return;
+    const todoActivity = this.activities.get("todo:main");
+    if (todoActivity?.kind === "todo" && todoActivity.status === "running") {
+      const detail = todoActivity.detail as TodoDetail;
+      const items = detail.items.map((item) => ({
+        ...item,
+        status: item.status === "in_progress" ? "pending" as const : item.status,
+      }));
+      const completed = items.filter((item) => item.status === "completed").length;
+      this.upsertActivity({
+        ...todoActivity,
+        status: completed === items.length && items.length > 0 ? "completed" : "pending",
+        subtitle: `${completed}/${items.length} 已完成`,
+        detail: { items, completed, total: items.length },
+        endedAt: this.ctx.now(),
+      });
+    }
     // 最终快照必须先于 RUN_FINISHED：AG-UI 规定流在终止事件后即结束，
     // 之后的事件不会被消费。
     // 不设 progressNote：状态徽章已显示「已完成」，再写一遍会重复。
-    this.emitSnapshot({ status: "completed" });
+    this.emitSnapshot({ status: "completed", usage: this.usage });
     this.finished = true;
     this.emit({
       type: EventType.RUN_FINISHED,
@@ -546,7 +681,12 @@ export class DeepAgentToAguiAdapter {
       runId: this.ctx.input.runId,
       outcome: {
         type: "interrupt",
-        interrupts: [],
+        // pendingInterrupts 为空属防御分支（正常路径 emitInterrupts 总是先
+        // 被调用）；兜底 ID 用 runId 派生保持确定性，便于问题排查。
+        interrupts:
+          this.pendingInterrupts.length > 0
+            ? this.pendingInterrupts
+            : [{ id: `interrupt:${this.ctx.input.runId}`, reason: "tool_approval" }],
       },
       timestamp: this.ctx.now(),
     });
@@ -558,6 +698,89 @@ export class DeepAgentToAguiAdapter {
   }
 
   // ---- 内部实现 ----
+
+  private startToolActivity(callId: string, toolName: string, input: unknown): number | null {
+    if (this.seenToolCalls.has(callId)) return null;
+    this.seenToolCalls.add(callId);
+    const startedAt = this.ctx.now();
+    const fileOperation = FILE_TOOLS[toolName];
+    if (fileOperation) {
+      const path = describePath(input);
+      this.upsertActivity({
+        id: `file:${callId}`,
+        kind: "file",
+        status: "running",
+        title: `${fileOperation} · ${toolName}`,
+        subtitle: path,
+        detail: { path, operation: fileOperation },
+        startedAt,
+      });
+    }
+    this.upsertActivity({
+      id: `tool:${callId}`,
+      kind: "tool",
+      status: "running",
+      title: toolName,
+      subtitle: "执行中",
+      detail: { toolName, input } satisfies ToolDetail,
+      startedAt,
+    });
+    return startedAt;
+  }
+
+  private finishToolActivity(
+    callId: string,
+    toolName: string,
+    input: unknown,
+    startedAt: number,
+    output: unknown,
+    status: "finished" | "error",
+    error?: string,
+  ): void {
+    const current = this.activities.get(`tool:${callId}`);
+    if (current && current.status !== "running") return;
+    const endedAt = this.ctx.now();
+    const outputText = safeStringify(output);
+    const activityStatus = status === "error" ? "failed" : "completed";
+    this.upsertActivity({
+      id: `tool:${callId}`,
+      kind: "tool",
+      status: activityStatus,
+      title: toolName,
+      subtitle: status === "error" ? "失败" : "完成",
+      detail: {
+        toolName,
+        input,
+        output: outputText.text,
+        truncated: outputText.truncated,
+      } satisfies ToolDetail,
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      ...(error ? { error } : {}),
+    });
+
+    const fileOperation = FILE_TOOLS[toolName];
+    if (!fileOperation) return;
+    const path = describePath(input);
+    const fileDetail: FileDetail = { path, operation: fileOperation };
+    if (fileOperation === "write" || fileOperation === "edit" || fileOperation === "delete") {
+      const change = this.ctx.diffRecorder?.take(fileOperation, path);
+      if (change) fileDetail.diff = computeFileDiff(change.before, change.after);
+    }
+    this.upsertActivity({
+      id: `file:${callId}`,
+      kind: "file",
+      status: activityStatus,
+      title: `${fileOperation} · ${toolName}`,
+      subtitle: path,
+      detail: fileDetail,
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      ...(error ? { error } : {}),
+    });
+  }
 
   private upsertActivity(activity: Activity): void {
     const existing = this.activities.get(activity.id);
@@ -591,6 +814,7 @@ export class DeepAgentToAguiAdapter {
       progressNote: patch.progressNote ?? null,
       interrupts: patch.interrupts ?? [],
       error: patch.error ?? null,
+      ...(patch.usage ? { usage: patch.usage } : {}),
     };
     this.emit({
       type: EventType.CUSTOM,
@@ -601,12 +825,9 @@ export class DeepAgentToAguiAdapter {
   }
 
   private emit(event: BaseEvent): void {
-    const enriched = {
-      runId: this.ctx.input.runId,
-      threadId: this.ctx.input.threadId,
-      ...event,
-    };
-    this.sink(enriched as BaseEvent);
+    // RUN_STARTED / RUN_FINISHED 按标准事件字段携带 runId 和 threadId；
+    // 其他事件把运行信息放进 CUSTOM.value，避免在标准事件上附加未知字段。
+    this.sink(event);
   }
 }
 
@@ -630,86 +851,77 @@ function extractTodos(values: unknown): Array<{ content: string; status: "pendin
   return items.length > 0 ? items : null;
 }
 
-
-
-/**
- * 把模型原始推理片段转成可公开的进度摘要。
- *
- * 为什么不直接透传：原始隐藏思维链可能包含内部提示词、密钥、
- * 未经筛选的中间结论，甚至提示词注入内容（AGENTS.md 第 6、13 节）。
- *
- * 做法是「丢弃原文、只保留可分类的动作意图」：
- * 命中已知模式时输出对应的公开动作描述，未命中时输出中性占位。
- * 这样前端能展示「正在规划任务」这类进度，但拿不到模型怎么想的。
- */
-/**
- * 对流式思维链文本做安全过滤，移除 API Key 等敏感模式，但保留真实思考内容。
- */
-export function sanitizeReasoningContent(chunk: string): string {
-  if (!chunk || chunk.length === 0) return "";
-  const sensitive = /(api[_-]?key|secret|password|bearer\s|sk-[A-Za-z0-9]{8,})/i;
-  if (sensitive.test(chunk)) {
-    return "[已脱敏敏感信息]";
-  }
-  return chunk;
+function extractStateMessages(values: unknown): Array<Record<string, unknown>> {
+  if (!values || typeof values !== "object") return [];
+  const messages = (values as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) return [];
+  return messages.filter(
+    (message): message is Record<string, unknown> => Boolean(message) && typeof message === "object",
+  );
 }
 
-export function sanitizeReasoning(raw: string): string {
-  if (raw.trim().length === 0) return "";
-
-  // 命中任何敏感模式就直接丢弃整段，不做部分保留。
-  const sensitive =
-    /(api[_-]?key|secret|password|token|bearer\s|sk-[A-Za-z0-9]{8,}|system prompt|系统提示|忽略.{0,8}(指令|提示|规则)|ignore\s+(all\s+)?(previous|prior|above|the\s+above)\s+(instructions?|prompts?|rules?)|disregard\s+(all\s+)?(previous|above)|forget\s+(everything|all\s+previous))/i;
-  if (sensitive.test(raw)) return "";
-
-  // 只依据「意图关键词」生成公开描述，绝不引用原文措辞。
-  //
-  // 两个关键设计：
-  // 1. 英文一律用词边界：否则 read 会命中 already/ready、
-  //    write 会命中 writer/typewriter，造成误判。
-  // 2. 按组顺序取第一个命中，组顺序即语义优先级。
-  //    不用「按文本出现顺序」也不用「命中长度计分」：前者会因模型
-  //    换个措辞顺序就让 UI 上的进度描述跳变，后者实测 read the file(13)
-  //    会短于 analyze the structure(22) 导致顺序错乱。固定组顺序最可预测。
-  const groups: Array<[RegExp, string]> = [
-    [
-      /(\bplan(s|ning)?\b|\bstep[s]?\b|\btodo[s]?\b|break\s+(it|this|the\s+task)\s+down|规划|拆分|分解|步骤)/i,
-      "正在规划任务步骤",
-    ],
-    [
-      /(\bread(s|ing)?\b\s+(the\s+)?(file|content|code|config|source|data)|\bsearch(ing|es)?\b|\bgrep\b|\bglob\b|\blook(ing)?\s+(for|up|at|into)\b|\bfind(s|ing)?\s+(the\s+)?(file|pattern)|\blist(s|ing)?\s+(the\s+)?(dir|files|content)|读取|查看|检索|查找)/i,
-      "正在检索工作区文件",
-    ],
-    [
-      /(\bwrite(s|ing)?\b|\bcreat(e|es|ing)\b\s+(a\s+)?(file|new)|\bsave(s|ing)?\b|\boutput\b\s+to\b|写|创建|生成|保存)/i,
-      "正在准备写入文件",
-    ],
-    [
-      /(\bedit(s|ing)?\b|\bmodif(y|ies|ying|ication)\b|\bupdat(e|es|ing)\b\s+(the\s+)?file|\breplace(s|ing)?\b|修改|更新|替换)/i,
-      "正在准备修改文件",
-    ],
-    [
-      /(\bsubagent\b|\bsub-agent\b|\bdelegat(e|es|ing)\b|\bspawn(s|ing)?\b\s+(a\s+)?(task|agent)|\btask\b\s+tool|子\s?agent|委派)/i,
-      "正在派发子任务",
-    ],
-    [
-      /(\bverif(y|ies|ying|ication)\b|\bvalidat(e|es|ing)\b|\bcheck(s|ing)?\b\s+(if|whether|that|the)|\btest(s|ing)?\b\s+(the|this|it)|\brun(s|ning)?\b\s+(the\s+)?(command|test)|验证|检查|测试)/i,
-      "正在验证结果",
-    ],
-    [
-      /(\banalyz(e|es|ing|sis)\b|\bcompar(e|es|ing)\b|\bevaluat(e|es|ing)\b|\bassess(es|ing)?\b|\bconsider(s|ing)?\b\s+(the|this)|分析|比较|评估)/i,
-      "正在分析已有信息",
-    ],
-    [
-      /(\bsummar(y|ize|izes|izing)\b|\bconclud(e|es|ing)\b|\bin\s+conclusion\b|\bfinal(ly)?\b\s+(answer|response)|\bgather(s|ing)?\b\s+(the\s+)?(findings|results)|汇总|总结|归纳|整理一下|整理结论)/i,
-      "正在汇总发现",
-    ],
-  ];
-
-  for (const [pattern, description] of groups) {
-    if (pattern.test(raw)) return description;
+function extractStateToolCalls(message: Record<string, unknown>): Array<{
+  id: string;
+  name: string;
+  input: unknown;
+}> {
+  const additional = message.additional_kwargs;
+  const additionalCalls = additional && typeof additional === "object"
+    ? (additional as Record<string, unknown>).tool_calls
+    : undefined;
+  const rawCalls = Array.isArray(message.tool_calls)
+    ? message.tool_calls
+    : Array.isArray(additionalCalls)
+      ? additionalCalls
+      : [];
+  const calls: Array<{ id: string; name: string; input: unknown }> = [];
+  for (const raw of rawCalls) {
+    if (!raw || typeof raw !== "object") continue;
+    const call = raw as Record<string, unknown>;
+    const fn = call.function && typeof call.function === "object"
+      ? call.function as Record<string, unknown>
+      : undefined;
+    const id = typeof call.id === "string" ? call.id : "";
+    const name = typeof call.name === "string"
+      ? call.name
+      : typeof fn?.name === "string"
+        ? fn.name
+        : "";
+    let input = call.args ?? call.input ?? fn?.arguments;
+    if (typeof input === "string") {
+      try {
+        input = JSON.parse(input) as unknown;
+      } catch {
+        // 参数不是 JSON 时保留原始文本，工具调用活动仍可展示。
+      }
+    }
+    if (id && name) calls.push({ id, name, input });
   }
-  return "正在整理思路";
+  return calls;
+}
+
+function extractStateToolResult(message: Record<string, unknown>): {
+  callId: string;
+  output: unknown;
+  status: "finished" | "error";
+  error?: string;
+} | null {
+  const callId = typeof message.tool_call_id === "string"
+    ? message.tool_call_id
+    : typeof message.toolCallId === "string"
+      ? message.toolCallId
+      : "";
+  if (!callId) return null;
+  const status: "finished" | "error" = message.status === "error" || message.is_error === true
+    ? "error"
+    : "finished";
+  const error = typeof message.error === "string" ? message.error : undefined;
+  return {
+    callId,
+    output: message.content ?? message.output ?? message.artifact,
+    status,
+    ...(error ? { error } : {}),
+  };
 }
 
 /** 截断文本到指定长度。 */
@@ -751,11 +963,59 @@ async function safeAwait<T>(promise: Promise<T>): Promise<T | undefined> {
 }
 
 /** 把 AG-UI 消息数组转换为 LangChain 消息数组（供 Agent 输入）。 */
-export function aguiMessagesToLangChain(messages: Message[]): Array<{ role: "user" | "assistant" | "system"; content: string }> {
-  const out: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
+type OpenAiImageContentBlock = { type: "image_url"; image_url: { url: string } };
+
+export function aguiMessagesToLangChain(
+  messages: Message[],
+  openAiCompatibleImages = false,
+): Array<{ role: "user" | "assistant" | "system"; content: string | Array<ContentBlock | OpenAiImageContentBlock> }> {
+  const out: Array<{ role: "user" | "assistant" | "system"; content: string | Array<ContentBlock | OpenAiImageContentBlock> }> = [];
   for (const message of messages) {
     if (message.role === "tool") continue;
-    const content = typeof message.content === "string" ? message.content : "";
+    const content = typeof message.content === "string"
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.flatMap((part): Array<ContentBlock | OpenAiImageContentBlock> => {
+          if (part.type === "text") return [{ type: "text", text: part.text }];
+          if (part.type !== "image" && part.type !== "document") return [];
+          const metadata = part.metadata && typeof part.metadata === "object"
+            ? part.metadata as Record<string, unknown>
+            : {};
+          const filename = typeof metadata.filename === "string" ? metadata.filename : undefined;
+          const mimeType = part.source.type === "data"
+            ? part.source.mimeType
+            : part.source.mimeType;
+          if (part.type === "image") {
+            if (openAiCompatibleImages) {
+              if (part.source.type === "data") {
+                return [{ type: "image_url", image_url: { url: `data:${part.source.mimeType};base64,${part.source.value}` } }];
+              }
+              if (part.source.type === "url") {
+                return [{ type: "image_url", image_url: { url: part.source.value } }];
+              }
+            }
+            if (part.source.type === "data") {
+              return [{ type: "image", data: part.source.value, mimeType: part.source.mimeType, metadata: filename ? { filename } : undefined }];
+            }
+            if (part.source.type === "url") {
+              return [{ type: "image", url: part.source.value, mimeType, metadata: filename ? { filename } : undefined }];
+            }
+            return [{ type: "image", fileId: part.source.value, mimeType, metadata: filename ? { filename } : undefined }];
+          }
+          const isText = mimeType?.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml";
+          if (part.source.type === "data" && isText) {
+            const text = Buffer.from(part.source.value, "base64").toString("utf8");
+            return [{ type: "text", text: filename ? `Attachment ${filename}:\n${text}` : text }];
+          }
+          if (part.source.type === "data") {
+            return [{ type: "file", data: part.source.value, mimeType: part.source.mimeType, metadata: filename ? { filename } : undefined }];
+          }
+          if (part.source.type === "url") {
+            return [{ type: "file", url: part.source.value, mimeType, metadata: filename ? { filename } : undefined }];
+          }
+          return [{ type: "file", fileId: part.source.value, mimeType, metadata: filename ? { filename } : undefined }];
+        })
+        : "";
     if (message.role === "user" || message.role === "assistant" || message.role === "system") {
       out.push({ role: message.role, content });
     }

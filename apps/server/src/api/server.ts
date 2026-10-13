@@ -25,6 +25,8 @@ import { EventEncoder } from "@ag-ui/encoder";
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { z } from "zod";
 import { ConfigStore } from "../config/store.js";
+import { FileCheckpointSaver } from "../config/file-checkpoint-saver.js";
+import { WorkbenchStore, workbenchIndexSchema } from "../config/workbench-store.js";
 import { DeepAgentAgui } from "../agent/deep-agent-agui.js";
 import { fetchModels } from "../providers/model-list.js";
 import { createModel } from "../providers/adapter.js";
@@ -52,19 +54,33 @@ export interface ServerOptions {
   fetchImpl?: typeof fetch;
 }
 
-const MAX_BODY_BYTES = 1_000_000;
+// 前端附件总上限为 12 MiB，Base64 编码后会增大约三分之一，并带有 JSON 开销。
+const MAX_BODY_BYTES = 18 * 1024 * 1024;
+
 /**
  * 本地开发/预览前端的来源端口白名单。
  * Vite dev 用 5173，vite preview 用 5175；端口被占用时 Vite 会自动顺延，
  * 所以放行整个 517x 段，避免换端口就被 403 挡掉。
  */
-const DEV_WEB_ORIGIN_PORT_RANGE = [5173, 5174, 5175, 5176, 4173] as const;
+const DEV_WEB_ORIGIN_PORT_RANGES = [[5170, 5199], [4170, 4199]] as const;
 
 /** AG-UI 消息的最小校验。 */
+const contentSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("data"), value: z.string().max(18 * 1024 * 1024), mimeType: z.string().min(1) }),
+  z.object({ type: z.literal("url"), value: z.string().url(), mimeType: z.string().optional() }),
+  z.object({ type: z.literal("file"), value: z.string().min(1), provider: z.string().optional(), mimeType: z.string().optional() }),
+]);
+
+const contentPartSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string(), id: z.string().optional(), metadata: z.unknown().optional() }),
+  z.object({ type: z.literal("image"), source: contentSourceSchema, id: z.string().optional(), metadata: z.unknown().optional() }),
+  z.object({ type: z.literal("document"), source: contentSourceSchema, id: z.string().optional(), metadata: z.unknown().optional() }),
+]);
+
 const messageSchema = z.object({
   id: z.string().optional(),
   role: z.enum(["user", "assistant", "system", "tool", "developer"]),
-  content: z.string(),
+  content: z.union([z.string(), z.array(contentPartSchema).max(5)]),
   name: z.string().optional(),
   toolCallId: z.string().optional(),
 });
@@ -101,9 +117,12 @@ export async function createApp(options: ServerOptions) {
 
   const store = new ConfigStore(dataDir);
   await store.load();
+  const workbenchStore = new WorkbenchStore(dataDir);
+  const checkpointer = new FileCheckpointSaver(join(dataDir, "checkpoints.md"));
 
   const agent = new DeepAgentAgui({
     store,
+    checkpointer,
     workspaceRoot: currentWorkspaceRoot,
     shellEnabled: options.shellEnabled ?? false,
     approvalRequired: options.approvalRequired ?? true,
@@ -114,6 +133,9 @@ export async function createApp(options: ServerOptions) {
   const fetchImpl = options.fetchImpl;
 
   const server = createServer((req, res) => {
+    // SSE 关键：禁用 Nagle 算法。事件为高频小包，Nagle+延迟 ACK 会把它们
+    // 攒到一起直到连接关闭才发出，前端表现为「流式内容一次性出现」。
+    req.socket.setNoDelay(true);
     void handleRequest(req, res).catch((error: unknown) => {
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof Error ? error.message : "服务端内部错误";
@@ -144,6 +166,7 @@ export async function createApp(options: ServerOptions) {
       res.end();
       return;
     }
+
 
     if (method === "GET" && path === "/api/workspace/tree") {
       const requestedRoot = url.searchParams.get("root");
@@ -280,6 +303,62 @@ export async function createApp(options: ServerOptions) {
         providerCount: store.list().length,
       });
       return;
+    }
+
+    if (method === "GET" && path === "/api/workbench") {
+      sendJson(res, 200, { workbench: await workbenchStore.loadIndex() });
+      return;
+    }
+
+    if (method === "PUT" && path === "/api/workbench") {
+      const parsed = workbenchIndexSchema.safeParse(await readJsonBody(req));
+      if (!parsed.success) {
+        sendJson(res, 400, { error: "工作台数据格式无效" });
+        return;
+      }
+      await workbenchStore.saveIndex(parsed.data);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    const workbenchSessionMatch = /^\/api\/workbench\/sessions\/([^/]+)$/.exec(path);
+    if (workbenchSessionMatch) {
+      let threadId: string;
+      try {
+        threadId = decodeURIComponent(workbenchSessionMatch[1] ?? "");
+      } catch {
+        sendJson(res, 400, { error: "会话标识无效" });
+        return;
+      }
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(threadId)) {
+        sendJson(res, 400, { error: "会话标识格式无效" });
+        return;
+      }
+      if (method === "GET") {
+        const state = await workbenchStore.loadSessionState(threadId);
+        sendJson(res, state === null ? 404 : 200, state === null ? { error: "会话状态不存在" } : { state });
+        return;
+      }
+      if (method === "PUT") {
+        const state = await readJsonBody(req);
+        if (state === null || typeof state !== "object" || Array.isArray(state)) {
+          sendJson(res, 400, { error: "会话状态格式无效" });
+          return;
+        }
+        try {
+          await workbenchStore.saveSessionState(threadId, state);
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : "会话状态保存失败" });
+          return;
+        }
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (method === "DELETE") {
+        await workbenchStore.deleteSessionState(threadId);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
     }
 
     if (method === "POST" && path === "/agent") {
@@ -443,12 +522,24 @@ export async function createApp(options: ServerOptions) {
     });
 
     let closed = false;
-    res.on("close", () => {
-      closed = true;
-    });
-
     await new Promise<void>((resolvePromise) => {
-      agent.run(input).subscribe({
+      let settled = false;
+      const subscription: { current?: { unsubscribe(): void } } = {};
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        res.off("close", onClose);
+        resolvePromise();
+      };
+      const onClose = (): void => {
+        closed = true;
+        // 客户端断开时取消 Observable，触发 Agent 的 AbortSignal teardown。
+        subscription.current?.unsubscribe();
+        settle();
+      };
+      res.on("close", onClose);
+
+      subscription.current = agent.run(input).subscribe({
         next: (event: BaseEvent) => {
           if (closed) return;
           res.write(encoder.encodeSSE(event));
@@ -466,11 +557,11 @@ export async function createApp(options: ServerOptions) {
             } as BaseEvent),
           );
           res.end();
-          resolvePromise();
+          settle();
         },
         complete: () => {
           if (!closed) res.end();
-          resolvePromise();
+          settle();
         },
       });
     });
@@ -492,6 +583,7 @@ export async function createApp(options: ServerOptions) {
       await new Promise<void>((resolvePromise, rejectPromise) => {
         server.close((error) => (error ? rejectPromise(error) : resolvePromise()));
       });
+      agent.close();
     },
   };
 
@@ -501,10 +593,7 @@ export async function createApp(options: ServerOptions) {
       const localHosts = ["localhost", "127.0.0.1", "[::1]", "::1"];
       if (!localHosts.includes(parsed.hostname)) return false;
       const originPort = parsed.port === "" ? 80 : Number(parsed.port);
-      return (
-        originPort === port ||
-        (DEV_WEB_ORIGIN_PORT_RANGE as readonly number[]).includes(originPort)
-      );
+      return originPort === port || DEV_WEB_ORIGIN_PORT_RANGES.some(([min, max]) => originPort >= min && originPort <= max);
     } catch {
       return false;
     }

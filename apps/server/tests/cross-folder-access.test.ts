@@ -13,7 +13,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAgentBackend, APPROVAL_TOOLS } from "../src/agent/create-agent.js";
+import {
+  createAgentBackend,
+  APPROVAL_TOOLS,
+  AUTO_APPROVAL_TOOLS,
+  approvalToolsForMode,
+} from "../src/agent/create-agent.js";
 
 let root: string;
 let workspaceRoot: string;
@@ -57,6 +62,20 @@ describe("跨文件夹访问", () => {
     expect(result.error).toBeUndefined();
     // 真的落到了磁盘上。
     expect(await readFile(target, "utf8")).toContain("跨目录写入成功");
+  });
+
+  it.runIf(process.platform === "win32")("删除工具的 POSIX 盘符路径会正确映射回 Windows 路径", async () => {
+    const target = join(outsideDir, "delete-through-agent.txt");
+    await writeFile(target, "待删除内容", "utf8");
+    const backend = createAgentBackend({
+      workspaceRoot,
+      shellEnabled: false,
+      crossFolderAccess: true,
+    });
+    const deepAgentsPath = `/${target.replace(/\\/g, "/")}`;
+    const result = await backend.delete(deepAgentsPath);
+    expect(result.error).toBeUndefined();
+    await expect(readFile(target, "utf8")).rejects.toThrow();
   });
 
   it("关闭时同样的绝对路径会被拒绝（对照旧行为）", async () => {
@@ -104,5 +123,15 @@ describe("跨文件夹访问", () => {
     expect(APPROVAL_TOOLS).toContain("write_file");
     expect(APPROVAL_TOOLS).toContain("edit_file");
     expect(APPROVAL_TOOLS).toContain("execute");
+  });
+
+  it("权限模式分别保留完整审批、风险操作审批和免逐项审批", () => {
+    expect(approvalToolsForMode("ask")).toEqual(APPROVAL_TOOLS);
+    expect(approvalToolsForMode("auto")).toEqual(AUTO_APPROVAL_TOOLS);
+    expect(approvalToolsForMode("full")).toEqual([]);
+    expect(AUTO_APPROVAL_TOOLS).toContain("delete");
+    expect(AUTO_APPROVAL_TOOLS).toContain("execute");
+    expect(AUTO_APPROVAL_TOOLS).not.toContain("write_file");
+    expect(AUTO_APPROVAL_TOOLS).not.toContain("edit_file");
   });
 });

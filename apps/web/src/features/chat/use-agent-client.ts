@@ -12,6 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HttpAgent, type RunAgentParameters } from "@ag-ui/client";
+import type { ContentPart } from "@ag-ui/client";
+import type { BaseEvent } from "@ag-ui/client";
+import type { FileUIPart } from "ai";
 import {
   buildRunParameters,
   createInitialState,
@@ -20,6 +23,8 @@ import {
   type ClientAction,
   type ClientState,
 } from "./client-reducer.js";
+import { takeRevealStep } from "./stream-playback.js";
+import type { PermissionMode } from "@deepagent/shared";
 
 /** 发起一轮运行时需要透传给服务端适配层的配置。 */
 export interface AgentRunOptions {
@@ -27,6 +32,7 @@ export interface AgentRunOptions {
   modelId?: string;
   effort: "low" | "medium" | "high";
   workspaceRoot?: string;
+  permissionMode?: PermissionMode;
 }
 
 /** 单个中断的决策类型。 */
@@ -47,7 +53,7 @@ export interface AgentClient {
   runningThreadIds: string[];
   /** 所有已创建的会话状态（含后台会话）。 */
   allStates: Record<string, ClientState>;
-  send: (content: string, options: AgentRunOptions) => Promise<void>;
+  send: (content: string, options: AgentRunOptions, attachments?: Array<FileUIPart & { id: string }>) => Promise<void>;
   stop: () => Promise<void>;
   stopThread: (threadId: string) => Promise<void>;
   submitDecisions: (options: AgentRunOptions) => Promise<void>;
@@ -59,6 +65,29 @@ export interface AgentClient {
   setDecision: (interruptId: string, decision: DecisionInput) => void;
   restoreCheckpoint: (messageId: string) => void;
   rollbackBeforeMessage: (messageId: string) => void;
+  /** 清空指定（或当前）会话的全部消息与活动，保留会话本身与工作区绑定。 */
+  clearThread: (threadId?: string) => void;
+}
+
+function toAguiContent(
+  content: string,
+  attachments: Array<FileUIPart & { id: string }> = [],
+): string | ContentPart[] {
+  if (attachments.length === 0) return content;
+  const parts: ContentPart[] = [];
+  if (content.trim()) parts.push({ type: "text", text: content });
+  for (const attachment of attachments) {
+    const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(attachment.url);
+    if (!match?.[1] || !match[2]) continue;
+    const mimeType = attachment.mediaType || match[1];
+    const source = { type: "data" as const, value: match[2], mimeType };
+    if (mimeType.startsWith("image/")) {
+      parts.push({ type: "image", source, metadata: { filename: attachment.filename } });
+    } else {
+      parts.push({ type: "document", source, metadata: { filename: attachment.filename } });
+    }
+  }
+  return parts.length > 0 ? parts : content;
 }
 
 /** AG-UI 客户端 Hook。 */
@@ -83,6 +112,9 @@ export function useAgentClient(serverUrl: string): AgentClient {
   const agentsRef = useRef(new Map<string, HttpAgent>());
   /** 被用户主动取消的线程，用于区分「取消」与「真实错误」。 */
   const cancelledRef = useRef(new Set<string>());
+  /** 每个会话尚未揭示的事件。思考和正文按拍切开，工具事件排在已到达文本之后。 */
+  const playbackQueuesRef = useRef(new Map<string, BaseEvent[]>());
+  const playbackActiveRef = useRef(new Set<string>());
 
   /** 取得（或惰性创建）指定线程的 HttpAgent。 */
   const getAgent = useCallback(
@@ -108,6 +140,55 @@ export function useAgentClient(serverUrl: string): AgentClient {
     threadsRef.current = { ...threadsRef.current, [threadId]: next };
     setThreads(threadsRef.current);
   }, []);
+
+  const clearPlayback = useCallback((threadId: string): void => {
+    playbackQueuesRef.current.set(threadId, []);
+  }, []);
+
+  const waitForPlayback = useCallback(async (threadId: string): Promise<void> => {
+    for (;;) {
+      const pending = playbackQueuesRef.current.get(threadId);
+      if (!playbackActiveRef.current.has(threadId) && (!pending || pending.length === 0)) return;
+      if (cancelledRef.current.has(threadId)) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }, []);
+
+  const pumpPlayback = useCallback((threadId: string): void => {
+    if (playbackActiveRef.current.has(threadId)) return;
+    playbackActiveRef.current.add(threadId);
+    const queue = playbackQueuesRef.current.get(threadId) ?? [];
+    playbackQueuesRef.current.set(threadId, queue);
+    const step = async (): Promise<void> => {
+      try {
+        while (queue.length > 0) {
+          if (cancelledRef.current.has(threadId)) {
+            queue.length = 0;
+            break;
+          }
+          const next = queue[0];
+          if (!next) break;
+          const reveal = takeRevealStep(next);
+          queue.shift();
+          if (reveal.rest) queue.unshift(reveal.rest);
+          const current = threadsRef.current[threadId] ?? createInitialState(threadId);
+          applyActions(threadId, eventToActions(reveal.emit, current));
+          if (reveal.waitMs > 0) await new Promise((resolve) => setTimeout(resolve, reveal.waitMs));
+        }
+      } finally {
+        playbackActiveRef.current.delete(threadId);
+        if (queue.length > 0 && !cancelledRef.current.has(threadId)) pumpPlayback(threadId);
+      }
+    };
+    void step();
+  }, [applyActions]);
+
+  const enqueueEvent = useCallback((threadId: string, event: BaseEvent): void => {
+    const queue = playbackQueuesRef.current.get(threadId) ?? [];
+    queue.push(event);
+    playbackQueuesRef.current.set(threadId, queue);
+    pumpPlayback(threadId);
+  }, [pumpPlayback]);
 
   /** 更新某个线程的运行中标记。 */
   const setRunningFor = useCallback((threadId: string, running: boolean): void => {
@@ -138,8 +219,20 @@ export function useAgentClient(serverUrl: string): AgentClient {
   const runOnce = useCallback(
     async (threadId: string, parameters: RunAgentParameters): Promise<void> => {
       const agent = getAgent(threadId);
+      // 新运行启动即清掉上一轮遗留的审批中断与进度摘要：
+      // 否则批准后恢复运行时，底部「继续执行」栏仍挂着旧中断，
+      // 按钮又因运行中被禁用，看起来就是「点了不会继续」。
       applyActions(threadId, [
-        { type: "patchRun", patch: { status: "running", runId: parameters.runId, error: null } },
+        {
+          type: "patchRun",
+          patch: {
+            status: "running",
+            runId: parameters.runId,
+            error: null,
+            interrupts: [],
+            progressNote: null,
+          },
+        },
       ]);
       setRunningFor(threadId, true);
 
@@ -158,9 +251,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
       try {
         await agent.runAgent(parameters, {
           onEvent: ({ event }) => {
-            const current =
-              threadsRef.current[threadId] ?? createInitialState(threadId);
-            applyActions(threadId, eventToActions(event, current));
+            enqueueEvent(threadId, event);
           },
           onRunFailed: ({ error }) => {
             applyActions(threadId, [
@@ -168,6 +259,18 @@ export function useAgentClient(serverUrl: string): AgentClient {
             ]);
           },
         });
+        // 先把已经到达的思考和正文逐拍揭示完，再判断运行有没有正常收尾。
+        await waitForPlayback(threadId);
+        // 流结束但没有收到 RUN_FINISHED / RUN_ERROR 时，不要让运行状态与 Todo
+        // 永久停留在“进行中”；将其归类为断流错误，保留已完成项并释放当前项。
+        if (!cancelledRef.current.has(threadId) && threadsRef.current[threadId]?.run.status === "running") {
+          applyActions(threadId, [
+            {
+              type: "patchRun",
+              patch: { status: "error", error: "Agent 流意外结束，请检查连接后继续任务" },
+            },
+          ]);
+        }
       } catch (error) {
         if (cancelledRef.current.has(threadId)) {
           applyActions(threadId, [
@@ -185,18 +288,24 @@ export function useAgentClient(serverUrl: string): AgentClient {
           ]);
         }
       } finally {
+        await waitForPlayback(threadId);
         cancelledRef.current.delete(threadId);
         setRunningFor(threadId, false);
       }
     },
-    [applyActions, getAgent, setRunningFor],
+    [applyActions, enqueueEvent, getAgent, setRunningFor, waitForPlayback],
   );
 
   /** 发送一条新消息到指定会话。 */
   const sendToThread = useCallback(
-    async (threadId: string, content: string, options: AgentRunOptions): Promise<void> => {
+    async (
+      threadId: string,
+      content: string,
+      options: AgentRunOptions,
+      attachments: Array<FileUIPart & { id: string }> = [],
+    ): Promise<void> => {
       const trimmed = content.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0 && attachments.length === 0) return;
       // 只有「同一个会话」不允许重复触发；其它会话的运行不受影响。
       if (runningRef.current[threadId]) return;
 
@@ -206,7 +315,12 @@ export function useAgentClient(serverUrl: string): AgentClient {
       const assistantMessageId = cryptoRandomId();
       const now = Date.now();
       applyActions(threadId, [
-        { type: "addUserMessage", id: messageId, content: trimmed },
+        {
+          type: "addUserMessage",
+          id: messageId,
+          content: trimmed,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        },
         { type: "startPendingAssistant", messageId: assistantMessageId, startedAt: now },
         {
           type: "patchRun",
@@ -215,7 +329,11 @@ export function useAgentClient(serverUrl: string): AgentClient {
       ]);
 
       // 把用户消息同步给该线程的 HttpAgent，它会在运行请求里带上完整历史。
-      agent.addMessage({ id: messageId, role: "user", content: trimmed });
+      agent.addMessage({
+        id: messageId,
+        role: "user",
+        content: toAguiContent(trimmed, attachments),
+      });
       await runOnce(threadId, buildRunParameters(cryptoRandomId(), options));
     },
     [applyActions, ensureThread, getAgent, runOnce],
@@ -226,6 +344,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
     async (threadId: string): Promise<void> => {
       const agent = agentsRef.current.get(threadId);
       cancelledRef.current.add(threadId);
+      clearPlayback(threadId);
       agent?.abortRun();
       try {
         await fetch(`${serverUrl}/agent/cancel`, {
@@ -248,7 +367,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
       }
       setRunningFor(threadId, false);
     },
-    [applyActions, serverUrl, setRunningFor],
+    [applyActions, clearPlayback, serverUrl, setRunningFor],
   );
 
   /** 新建会话：只创建新线程并切过去，绝不触碰其它正在运行的会话。 */
@@ -282,6 +401,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
       const agent = agentsRef.current.get(threadId);
       if (agent) {
         cancelledRef.current.add(threadId);
+        clearPlayback(threadId);
         try {
           agent.abortRun();
         } catch {
@@ -314,7 +434,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
       switchActiveThread(nextActive);
       setRunningFor(threadId, false);
     },
-    [serverUrl, setRunningFor, switchActiveThread],
+    [clearPlayback, serverUrl, setRunningFor, switchActiveThread],
   );
 
   /** 载入已有会话状态（从本地存储恢复）。 */
@@ -335,11 +455,9 @@ export function useAgentClient(serverUrl: string): AgentClient {
 
       const agent = getAgent(threadId);
       agent.setMessages(
-        normalized.messages.map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-        })),
+        normalized.messages.map((message) => message.role === "user"
+          ? { id: message.id, role: "user" as const, content: toAguiContent(message.content, message.attachments) }
+          : { id: message.id, role: "assistant" as const, content: message.content }),
       );
       switchActiveThread(threadId);
     },
@@ -353,9 +471,12 @@ export function useAgentClient(serverUrl: string): AgentClient {
       if (runningRef.current[threadId]) return;
       const current = threadsRef.current[threadId];
       const interrupts = current?.run.interrupts ?? [];
-      if (interrupts.length === 0) return;
+      if (
+        interrupts.length === 0 ||
+        interrupts.some((interrupt) => !current?.pendingDecisions[interrupt.id])
+      ) return;
 
-      const resume = interrupts.map((interrupt) => {
+      const resume = interrupts.flatMap((interrupt) => {
         const decision = current?.pendingDecisions[interrupt.id];
         const payload =
           decision?.type === "reject"
@@ -363,7 +484,14 @@ export function useAgentClient(serverUrl: string): AgentClient {
             : decision?.type === "edit"
               ? { type: "edit" }
               : { type: "approve" };
-        return { interruptId: interrupt.id, status: "resolved" as const, payload };
+        // 一个 LangGraph interrupt 可以同时包含多个需要审批的 action；
+        // resume 的 decisions 必须与挂起的工具调用逐项对应。
+        const decisionCount = Array.isArray(interrupt.args) ? interrupt.args.length : 1;
+        return Array.from({ length: decisionCount }, () => ({
+          interruptId: interrupt.id,
+          status: "resolved" as const,
+          payload,
+        }));
       });
 
       await runOnce(threadId, buildRunParameters(cryptoRandomId(), options, resume));
@@ -408,6 +536,20 @@ export function useAgentClient(serverUrl: string): AgentClient {
     [applyActions, getAgent],
   );
 
+  /**
+   * 清空指定（或当前）会话的全部消息与活动：保留 threadId 与会话条目，
+   * 同步重置该线程 HttpAgent 的历史，避免下一轮运行带上已清空的内容。
+   */
+  const clearThread = useCallback(
+    (threadId?: string): void => {
+      const id = threadId ?? activeThreadIdRef.current;
+      const agent = agentsRef.current.get(id);
+      if (agent) agent.setMessages([]);
+      applyActions(id, [{ type: "reset" }]);
+    },
+    [applyActions],
+  );
+
   // 激活线程变化时同步权威副本。
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -424,8 +566,8 @@ export function useAgentClient(serverUrl: string): AgentClient {
   );
 
   const send = useCallback(
-    (content: string, options: AgentRunOptions) =>
-      sendToThread(activeThreadIdRef.current, content, options),
+    (content: string, options: AgentRunOptions, attachments?: Array<FileUIPart & { id: string }>) =>
+      sendToThread(activeThreadIdRef.current, content, options, attachments),
     [sendToThread],
   );
 
@@ -478,6 +620,7 @@ export function useAgentClient(serverUrl: string): AgentClient {
     setDecision,
     restoreCheckpoint,
     rollbackBeforeMessage,
+    clearThread,
   };
 }
 

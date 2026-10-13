@@ -7,11 +7,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { createApp } from "../src/api/server.js";
+import { WorkbenchStore } from "../src/config/workbench-store.js";
 
 /** 测试用的 API Key，绝不外泄到任何响应。 */
 const SECRET_KEY = "sk-test-secret-key-1234567890abcd";
@@ -20,6 +21,7 @@ let server: Server;
 let baseUrl: string;
 let dataDir: string;
 let workspaceRoot: string;
+let closeApp: (() => Promise<void>) | undefined;
 /** 测试注入的假 fetch。 */
 let injectedFetch: typeof fetch;
 /** 当前测试设置的真实处理器。 */
@@ -47,6 +49,7 @@ beforeAll(async () => {
     workspaceRoot,
     fetchImpl: injectedFetch,
   });
+  closeApp = app.close;
   server = app.server;
   await new Promise<void>((resolveListen) => {
     server.listen(0, "127.0.0.1", () => resolveListen());
@@ -57,12 +60,54 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolveClose) => {
-    server.close(() => resolveClose());
-  });
+  await closeApp?.();
   // Windows 上 rm 对刚关闭的目录可能偶发 ENOTEMPTY，重试几次即可。
   await rmWithRetry(dataDir);
   await rmWithRetry(workspaceRoot);
+});
+
+describe("工作台本地持久化", () => {
+  it("跨前端 origin 读取会话索引和含图片的会话状态", async () => {
+    const index = {
+      version: 1,
+      customWorkspaces: ["D:/work/project"],
+      sessions: [{
+        id: "thread-persist-1",
+        title: "图片对话",
+        createdAt: 100,
+        updatedAt: 200,
+        messageCount: 1,
+        workspaceRoot: "D:/work/project",
+        folderName: "project",
+      }],
+      activeSessionId: "thread-persist-1",
+      currentWorkspace: "D:/work/project",
+    };
+    expect((await api("PUT", "/api/workbench", index)).status).toBe(200);
+    expect((await api("GET", "/api/workbench")).body.workbench).toEqual(index);
+    const indexMarkdown = await readFile(join(dataDir, "workbench", "index.md"), "utf8");
+    expect(indexMarkdown).toContain("# 工作台索引");
+    expect(indexMarkdown).toContain("```json");
+
+    const state = { threadId: "thread-persist-1", messages: [{
+      role: "user",
+      content: "这张图是什么？",
+      attachments: [{ filename: "sample.png", url: "data:image/png;base64,aW1hZ2U=" }],
+    }] };
+    expect((await api("PUT", "/api/workbench/sessions/thread-persist-1", state)).status).toBe(200);
+    expect((await api("GET", "/api/workbench/sessions/thread-persist-1")).body.state).toEqual(state);
+    const sessionMarkdown = await readFile(join(dataDir, "workbench", "sessions", "thread-persist-1.md"), "utf8");
+    expect(sessionMarkdown).toContain("# 会话状态");
+    expect(sessionMarkdown).toContain("sample.png");
+    const afterRestart = new WorkbenchStore(dataDir);
+    expect(await afterRestart.loadIndex()).toEqual(index);
+    expect(await afterRestart.loadSessionState("thread-persist-1")).toEqual(state);
+  });
+
+  it("拒绝路径穿越形式的会话标识", async () => {
+    const response = await fetch(`${baseUrl}/api/workbench/sessions/%2e%2e`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect([400, 404]).toContain(response.status);
+  });
 });
 
 /** 删除临时目录，失败时重试。 */

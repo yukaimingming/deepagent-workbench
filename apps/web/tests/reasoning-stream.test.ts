@@ -85,7 +85,7 @@ describe("reasoning 与正文归并到同一条消息", () => {
       textEnd("text-2"),
     ]);
     expect(state.messages).toHaveLength(1);
-    expect(state.messages[0]?.id).toBe("text-2");
+    expect(state.messages[0]?.id).toBe("reason-2");
     expect(state.messages[0]?.reasoning).toBe("正在检索工作区文件");
     expect(state.messages[0]?.content).toBe("答案");
   });
