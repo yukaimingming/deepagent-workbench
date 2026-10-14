@@ -37,3 +37,8 @@ test-results/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 临时测试产物
+.playwright-cli/
+artifacts/
+output/

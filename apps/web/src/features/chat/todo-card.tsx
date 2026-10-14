@@ -11,7 +11,7 @@
  * - QueueItemContent 任务标题内容（已完成划线）
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   QueueList,
   QueueItem,
@@ -73,7 +73,7 @@ export function TodoCard({ activity, isOpen: controlledOpen, onToggleOpen, onClo
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen, handleClose]);
 
-  if (!hasItems) return null;
+  if (!hasItems || !detail) return null;
 
   return (
     <div
