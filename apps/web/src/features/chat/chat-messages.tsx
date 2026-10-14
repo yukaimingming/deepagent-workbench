@@ -188,6 +188,29 @@ export function buildTurnProcessTimeline(
       return true;
     });
 
+    let effectiveDuration = turnDuration;
+    if (effectiveDuration === undefined) {
+      const endTimestamps = [
+        ...turnActivities.map((a) => a.endedAt).filter((t): t is number => typeof t === "number" && t > 0),
+        ...turnMessages.map((m) => m.runEndedAt).filter((t): t is number => typeof t === "number" && t > 0),
+      ];
+      const startTimestamps = [
+        host.createdAt,
+        ...turnActivities.map((a) => a.startedAt).filter((t): t is number => typeof t === "number" && t > 0),
+        ...turnMessages.map((m) => m.createdAt ?? m.reasoningStartedAt ?? m.contentStartedAt).filter((t): t is number => typeof t === "number" && t > 0),
+      ].filter((t): t is number => typeof t === "number" && t > 0);
+
+      if (endTimestamps.length > 0 && startTimestamps.length > 0) {
+        const span = Math.max(...endTimestamps) - Math.min(...startTimestamps);
+        if (span > 0) {
+          effectiveDuration = span;
+        }
+      }
+    }
+    if (effectiveDuration !== undefined) {
+      durationByHost.set(host.id, effectiveDuration);
+    }
+
     const isItemProcessMessage = (item: ChatMessage, msgIdx: number): boolean => {
       if (item.isProcess === true) return true;
       const hasLaterAssistantContent = turnMessages

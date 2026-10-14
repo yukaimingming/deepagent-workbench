@@ -551,19 +551,33 @@ export function reduceClientEvent(state: ClientState, action: ClientAction): Cli
         durationMs: startsNewRun ? undefined : durationMs,
       };
       const finalRunId = action.patch.runId ?? state.run.runId;
-      if (status === "completed" && finalRunId && endedAt !== undefined && durationMs !== undefined) {
+      if (status === "completed" && endedAt !== undefined && durationMs !== undefined) {
         let finalMessageIndex = -1;
-        for (let index = messages.length - 1; index >= 0; index -= 1) {
-          const message = messages[index];
-          if (message?.role === "assistant" && message.runId === finalRunId) {
-            finalMessageIndex = index;
-            break;
+        if (finalRunId) {
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index];
+            if (message?.role === "assistant" && message.runId === finalRunId) {
+              finalMessageIndex = index;
+              break;
+            }
+          }
+        }
+        if (finalMessageIndex === -1) {
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index];
+            if (message?.role === "assistant") {
+              finalMessageIndex = index;
+              break;
+            }
           }
         }
         if (finalMessageIndex >= 0) {
-          messages = messages.map((message, index) => index === finalMessageIndex
-            ? { ...message, runEndedAt: endedAt, runDurationMs: durationMs }
-            : message);
+          messages = messages.map((message, index) => {
+            if (index === finalMessageIndex || (finalRunId && message.runId === finalRunId)) {
+              return { ...message, runEndedAt: endedAt, runDurationMs: durationMs };
+            }
+            return message;
+          });
         }
       }
       return { ...state, messages, activities, run };

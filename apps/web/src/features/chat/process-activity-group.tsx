@@ -265,31 +265,66 @@ export function ProcessActivityGroup({
     setManualExpanded(undefined);
   }
   const expanded = manualExpanded ?? !settled;
-  const [now, setNow] = useState(() => Date.now());
-  // 保持起始时间单调固定，从本轮运行开始（runStartedAt 或组件初始挂载时间）持续平滑计时，
-  // 绝不能在第一个思考或工具项加入时把起始时间向后推移导致计时重置为 0。
-  const initialMountTimeRef = useRef<number>(runStartedAt ?? now);
-  const lastRunStartedAtRef = useRef(runStartedAt);
-  if (runStartedAt !== undefined && runStartedAt !== lastRunStartedAtRef.current) {
-    lastRunStartedAtRef.current = runStartedAt;
-    initialMountTimeRef.current = runStartedAt;
-  }
-  const timeCandidates = [
-    initialMountTimeRef.current,
-    ...(runStartedAt ? [runStartedAt] : []),
-    ...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt),
-  ].filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
-  const startedAt = timeCandidates.length > 0 ? Math.min(...timeCandidates) : (runStartedAt ?? now);
-  const liveElapsed = Math.max(durationMs ?? 0, now - startedAt);
-  const [frozenElapsed, setFrozenElapsed] = useState<number | undefined>(undefined);
-  if (settled && frozenElapsed === undefined) {
-    setFrozenElapsed(liveElapsed);
-  } else if (!settled && frozenElapsed !== undefined) {
-    setFrozenElapsed(undefined);
-  }
-  const elapsedMs = settled ? (frozenElapsed ?? liveElapsed) : liveElapsed;
   const isComplete = settled || finalAnswerComplete || runCompleted;
   const statusLabel = isComplete ? "已完成分析" : "正在分析";
+
+  // 计算历史静态结束时间与起始时间，作为缺少 durationMs 时的确定性后备
+  const staticEndCandidates = items.flatMap((item) => {
+    if (item.kind === "activity" && item.activity.endedAt) return [item.activity.endedAt];
+    return [];
+  });
+  const staticStartCandidates = items.map((item) =>
+    item.kind === "assistant" ? item.startedAt : item.activity.startedAt,
+  ).filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
+  const staticSpanMs = (staticEndCandidates.length > 0 && staticStartCandidates.length > 0)
+    ? Math.max(0, Math.max(...staticEndCandidates) - Math.min(...staticStartCandidates))
+    : undefined;
+
+  // 确定的已完成耗时：首选明确记录的 durationMs，备选历史 items 静态跨度
+  const recordedDuration = (typeof durationMs === "number" && durationMs > 0)
+    ? durationMs
+    : staticSpanMs;
+
+  const [mountTime] = useState(() => runStartedAt ?? Date.now());
+  const [now, setNow] = useState(() => Date.now());
+
+  const effectiveStartedAt = runStartedAt ?? mountTime;
+  const timeCandidates = [
+    effectiveStartedAt,
+    ...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt),
+  ].filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
+  const startedAt = timeCandidates.length > 0 ? Math.min(...timeCandidates) : effectiveStartedAt;
+
+  // 运行中的实时动态走表（仅在进行中且未完成时有效，绝对不在历史已完成状态中使用）
+  const liveElapsed = Math.max(0, now - startedAt);
+
+  // 冻结耗时：当本轮完成时定格
+  const [frozenElapsed, setFrozenElapsed] = useState<number | undefined>(() => {
+    // 关键修复：当用户在左侧边栏切换并点击历史对话时，组件挂载时即处于已完成状态，
+    // 此时必须直接使用已记录的历史耗时，绝不能走表当前时间 now！
+    if (isComplete || settled) {
+      return recordedDuration ?? (durationMs ?? 0);
+    }
+    return undefined;
+  });
+
+  // 当任务从进行中首次变为完成时定格耗时
+  const wasCompleteRef = useRef(isComplete || settled);
+  useEffect(() => {
+    if (!wasCompleteRef.current && (isComplete || settled)) {
+      setFrozenElapsed(recordedDuration ?? (durationMs ?? liveElapsed));
+    } else if (wasCompleteRef.current && !(isComplete || settled)) {
+      setFrozenElapsed(undefined);
+    }
+    wasCompleteRef.current = isComplete || settled;
+  }, [isComplete, settled, recordedDuration, durationMs, liveElapsed]);
+
+  // 最终展示耗时：
+  // 只要处于已完成状态（历史会话或运行结束），按优先级：明确记录的历史耗时 > 属性 durationMs > 冻结耗时 > 0；
+  // 无论如何，已完成时绝不接触 liveElapsed（即绝对不让 Date.now() 污染历史耗时）！
+  const elapsedMs = (isComplete || settled)
+    ? (recordedDuration ?? (durationMs !== undefined && durationMs > 0 ? durationMs : undefined) ?? frozenElapsed ?? 0)
+    : liveElapsed;
 
   useEffect(() => {
     if (isComplete) return;

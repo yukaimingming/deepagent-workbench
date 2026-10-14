@@ -37,9 +37,8 @@ interface TodoCardProps {
 
 export function TodoCard({ activity, isOpen: controlledOpen, onToggleOpen, onClose }: TodoCardProps) {
   const detail = activity.detail as TodoDetail | undefined;
-  if (!detail?.items?.length) return null;
-
-  const isAllDone = detail.completed >= detail.total && detail.total > 0;
+  const hasItems = Boolean(detail?.items?.length);
+  const isAllDone = Boolean(detail && detail.completed >= detail.total && detail.total > 0);
   const [internalOpen, setInternalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -54,13 +53,13 @@ export function TodoCard({ activity, isOpen: controlledOpen, onToggleOpen, onClo
     }
   };
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     if (isControlled) {
       onClose?.();
     } else {
       setInternalOpen(false);
     }
-  };
+  }, [isControlled, onClose]);
 
   // 点击外部自动收起待办面板
   useEffect(() => {
@@ -72,7 +71,9 @@ export function TodoCard({ activity, isOpen: controlledOpen, onToggleOpen, onClo
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isOpen]);
+  }, [isOpen, handleClose]);
+
+  if (!hasItems) return null;
 
   return (
     <div
