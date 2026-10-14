@@ -153,7 +153,7 @@ function PromptInputSubmitWithAttachments({
       disabled={!hasText && attachments.files.length === 0 && !isRunning}
       status={isRunning ? "streaming" : undefined}
       onStop={onStop}
-      className="size-8 rounded-lg bg-zinc-100 text-black hover:bg-white disabled:opacity-30 disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors shadow-none border-0 border-none outline-none focus:outline-none focus-visible:ring-0"
+      className="chat-submit-btn size-8 rounded-lg transition-colors shadow-none border-0 border-none outline-none focus:outline-none focus-visible:ring-0 bg-zinc-100 text-black hover:bg-white disabled:opacity-30 disabled:bg-zinc-800 disabled:text-zinc-500"
     />
   );
 }
@@ -414,7 +414,7 @@ export function ChatInput({
             maxFiles={MAX_ATTACHMENT_COUNT}
             maxFileSize={MAX_ATTACHMENT_SIZE}
             onError={handleAttachmentError}
-            className="rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
+            className="chat-prompt-input rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
           >
             <PromptInputHeader className="px-3 pt-3">
               <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
@@ -424,7 +424,7 @@ export function ChatInput({
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder="输入任务描述...（Enter 发送，Shift+Enter 换行）"
-                className="min-h-[50px] max-h-[220px] px-3.5 py-2.5 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-0 shadow-none focus-visible:ring-0"
+                className="chat-prompt-textarea min-h-[50px] max-h-[220px] px-3.5 py-2.5 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-0 shadow-none focus-visible:ring-0 bg-transparent"
               />
             </PromptInputBody>
 
@@ -435,7 +435,7 @@ export function ChatInput({
                   <PromptInputActionMenuTrigger
                     aria-label="添加图片或文件"
                     title="添加图片或文件"
-                    className="size-8 rounded-lg text-zinc-300 hover:bg-zinc-800/70 border-0 border-none outline-none focus:outline-none focus-visible:ring-0 shadow-none"
+                    className="chat-action-menu-btn size-8 rounded-lg text-zinc-300 hover:bg-zinc-800/70 border-0 border-none outline-none focus:outline-none focus-visible:ring-0 shadow-none transition-colors"
                   />
                   <PromptInputActionMenuContent className="border-zinc-700 bg-zinc-900 text-zinc-100">
                     <PromptInputActionAddAttachments label="添加图片或文件" />
@@ -587,7 +587,7 @@ export function ChatInput({
                     aria-label="Token 用量"
                     title="Token 用量"
                     className={cn(
-                      "flex size-4 items-center justify-center rounded-full transition-colors cursor-pointer border-0 border-none outline-none focus:outline-none shadow-none",
+                      "chat-token-usage-btn flex size-4 items-center justify-center rounded-full transition-colors cursor-pointer border-0 border-none outline-none focus:outline-none shadow-none",
                       usage
                         ? "bg-emerald-400/20 hover:bg-emerald-400/35"
                         : "bg-zinc-800 hover:bg-zinc-700",
@@ -595,7 +595,7 @@ export function ChatInput({
                   >
                     <span
                       className={cn(
-                        "size-1.5 rounded-full",
+                        "chat-token-usage-dot size-1.5 rounded-full",
                         usage ? "bg-emerald-400" : "bg-zinc-500",
                       )}
                     />
