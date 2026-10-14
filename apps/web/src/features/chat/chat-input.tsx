@@ -153,7 +153,7 @@ function PromptInputSubmitWithAttachments({
       disabled={!hasText && attachments.files.length === 0 && !isRunning}
       status={isRunning ? "streaming" : undefined}
       onStop={onStop}
-      className="size-8 rounded-lg bg-zinc-100 text-black hover:bg-white disabled:opacity-30 disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors shadow-none"
+      className="size-8 rounded-lg bg-zinc-100 text-black hover:bg-white disabled:opacity-30 disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors shadow-none border-0 border-none outline-none focus:outline-none focus-visible:ring-0"
     />
   );
 }
@@ -429,13 +429,13 @@ export function ChatInput({
             </PromptInputBody>
 
             {/* 底部工具条与提交按钮 */}
-            <PromptInputFooter className="flex items-center justify-between px-3 pb-2.5 pt-1.5 border-t border-zinc-800/40 overflow-visible">
+            <PromptInputFooter className="flex items-center justify-between px-3 pb-2.5 pt-1.5 border-0 border-none overflow-visible">
               <PromptInputTools className="flex items-center gap-2.5 text-[12px]">
                 <PromptInputActionMenu>
                   <PromptInputActionMenuTrigger
                     aria-label="添加图片或文件"
                     title="添加图片或文件"
-                    className="size-8 rounded-lg text-zinc-300 hover:bg-zinc-800/70"
+                    className="size-8 rounded-lg text-zinc-300 hover:bg-zinc-800/70 border-0 border-none outline-none focus:outline-none focus-visible:ring-0 shadow-none"
                   />
                   <PromptInputActionMenuContent className="border-zinc-700 bg-zinc-900 text-zinc-100">
                     <PromptInputActionAddAttachments label="添加图片或文件" />
@@ -452,7 +452,7 @@ export function ChatInput({
                       setIsModelDropdownOpen(false);
                       setIsEffortDropdownOpen(false);
                     }}
-                    className="composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-zinc-300 transition-colors hover:bg-zinc-800/70 hover:text-white"
+                    className="composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-zinc-300 transition-colors hover:bg-zinc-800/70 hover:text-white border-0 border-none outline-none focus:outline-none shadow-none"
                     title="选择本次及后续运行的工具审批方式"
                   >
                     {(() => {
@@ -509,7 +509,7 @@ export function ChatInput({
                       setIsEffortDropdownOpen(false);
                       setIsPermissionDropdownOpen(false);
                     }}
-                    className="composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2.5 py-1 text-zinc-300 transition-colors hover:bg-zinc-800/70 hover:text-white"
+                    className="composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2.5 py-1 text-zinc-300 transition-colors hover:bg-zinc-800/70 hover:text-white border-0 border-none outline-none focus:outline-none shadow-none"
                     title="点击下拉切换当前模型"
                   >
                     <span className="size-1.5 rounded-full bg-emerald-400 shrink-0" />
@@ -587,10 +587,10 @@ export function ChatInput({
                     aria-label="Token 用量"
                     title="Token 用量"
                     className={cn(
-                      "flex size-4 items-center justify-center rounded-full border transition-colors cursor-pointer",
+                      "flex size-4 items-center justify-center rounded-full transition-colors cursor-pointer border-0 border-none outline-none focus:outline-none shadow-none",
                       usage
-                        ? "border-emerald-400/60 bg-emerald-400/20 hover:border-emerald-300"
-                        : "border-zinc-600 bg-zinc-800 hover:border-zinc-500",
+                        ? "bg-emerald-400/20 hover:bg-emerald-400/35"
+                        : "bg-zinc-800 hover:bg-zinc-700",
                     )}
                   >
                     <span
@@ -688,7 +688,7 @@ export function ChatInput({
                       setIsPermissionDropdownOpen(false);
                     }}
                     className={cn(
-                      "composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 transition-colors hover:bg-zinc-800/70",
+                      "composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 transition-colors hover:bg-zinc-800/70 border-0 border-none outline-none focus:outline-none shadow-none",
                       reasoningUnsupported ? "opacity-40 cursor-not-allowed text-zinc-600" : "text-zinc-300 hover:text-white"
                     )}
                     title={
