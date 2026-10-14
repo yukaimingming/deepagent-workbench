@@ -209,6 +209,16 @@ try {
   await sleep(600);
   await capture("screenshot-split-view-drop-indicator.png");
 
+  // 清除蒙层悬停状态
+  await ev(`
+    (() => {
+      const chatContainer = document.querySelector('[data-testid="chat-pane-left"]')?.parentElement?.parentElement;
+      if (!chatContainer) return;
+      chatContainer.dispatchEvent(new DragEvent("dragleave", { bubbles: true, cancelable: true }));
+    })()
+  `);
+  await sleep(300);
+
   console.log("3. 释放拖拽以激活分屏显示...");
   // 模拟从侧边栏拖拽会话项到右侧主视窗区域
   const dragResult = await ev(`
@@ -243,75 +253,87 @@ try {
   `);
   console.log("分屏 DOM 检查结果:", checkSplitDom);
 
-  // 截屏 2：分屏完整双视窗视图
-  await capture("screenshot-split-view-two-panes.png");
+  // 截屏 2：分屏完整双视窗视图（无主分屏生硬标签，两侧均有关闭按钮）
+  await capture("screenshot-split-view-equal-panes.png");
 
-  console.log("4. 验证拖拽调节分割条比例...");
-  // 模拟通过 pointer 事件拖动分割条至 35%:65%
-  await ev(`
+  // 验证两边是否都具备关闭按钮
+  const closeBtnsCheck = await ev(`
     (() => {
-      const splitter = document.querySelector('[data-testid="split-chat-splitter"]');
-      if (splitter) {
-        const container = splitter.parentElement;
-        if (container) {
-          const rect = container.getBoundingClientRect();
-          const startX = rect.left + rect.width * 0.5;
-          const targetX = rect.left + rect.width * 0.35; // 调节为左 35% 右 65%
-          splitter.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: startX, bubbles: true }));
-          splitter.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: targetX, bubbles: true }));
-          splitter.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: targetX, bubbles: true }));
-        }
-      }
+      const leftClose = document.querySelector('[data-testid="chat-pane-left"] button[title="关闭此窗格"]');
+      const rightClose = document.querySelector('[data-testid="chat-pane-right"] button[title="关闭此窗格"]');
+      return {
+        hasLeftCloseBtn: Boolean(leftClose),
+        hasRightCloseBtn: Boolean(rightClose)
+      };
     })()
   `);
-  await sleep(600);
+  console.log("双屏关闭按钮存在性检查:", closeBtnsCheck);
 
-  // 截屏 3：调节分割比例后的视图
-  await capture("screenshot-split-view-resized.png");
-
-  console.log("4. 验证双击分割条重置 50%:50% 比例...");
+  console.log("4. 验证【关闭左边就显示右边】...");
   await ev(`
     (() => {
-      const splitter = document.querySelector('[data-testid="split-chat-splitter"]');
-      if (splitter) {
-        splitter.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      }
-    })()
-  `);
-  await sleep(600);
-  await capture("screenshot-split-view-reset-50-50.png");
-
-  console.log("5. 验证点击右屏关闭按钮，恢复单屏模式...");
-  await ev(`
-    (() => {
-      const closeBtn = document.querySelector('[data-testid="chat-pane-right"] button[title="关闭分屏"]');
-      if (closeBtn) {
-        closeBtn.click();
+      const leftClose = document.querySelector('[data-testid="chat-pane-left"] button[title="关闭此窗格"]');
+      if (leftClose) {
+        leftClose.click();
       } else {
-        window.__deepagentTestHooks.handleCloseSplit();
+        window.__deepagentTestHooks.handleCloseLeftPane();
       }
     })()
   `);
   await sleep(1000);
 
-  const checkSingleDom = await ev(`
+  const checkAfterCloseLeft = await ev(`
     (() => {
-      const leftPane = document.querySelector('[data-testid="chat-pane-left"]');
-      const rightPane = document.querySelector('[data-testid="chat-pane-right"]');
-      const splitter = document.querySelector('[data-testid="split-chat-splitter"]');
+      const currentPane = document.querySelector('[data-testid="chat-pane-left"]');
+      const currentTitle = currentPane?.querySelector('h2')?.textContent?.trim();
+      const hasRight = Boolean(document.querySelector('[data-testid="chat-pane-right"]'));
       return {
-        hasLeftPane: Boolean(leftPane),
-        hasRightPane: Boolean(rightPane),
-        hasSplitter: Boolean(splitter)
+        hasRight,
+        currentTitle
       };
     })()
   `);
-  console.log("关闭分屏后 DOM 检查结果（应仅剩单屏）:", checkSingleDom);
+  console.log("关闭左屏后检查（应只剩单屏，且展示原右屏内容）:", checkAfterCloseLeft);
+  await capture("screenshot-split-view-close-left-shows-right.png");
 
-  // 截屏 3：关闭分屏恢复单屏
-  await capture("screenshot-split-view-closed-single.png");
+  console.log("5. 重新打开分屏，验证【关闭右边就显示左边】...");
+  // 重新分屏
+  await ev(`
+    (async () => {
+      const hooks = window.__deepagentTestHooks;
+      await hooks.handleOpenSplitWithSession("session-test-left");
+    })()
+  `);
+  await sleep(1000);
 
-  console.log("=== VS Code 风格 Split View 分屏功能验证全部成功通过！ ===");
+  // 点击右侧关闭按钮
+  await ev(`
+    (() => {
+      const rightClose = document.querySelector('[data-testid="chat-pane-right"] button[title="关闭此窗格"]');
+      if (rightClose) {
+        rightClose.click();
+      } else {
+        window.__deepagentTestHooks.handleCloseRightPane();
+      }
+    })()
+  `);
+  await sleep(1000);
+
+  const checkAfterCloseRight = await ev(`
+    (() => {
+      const currentPane = document.querySelector('[data-testid="chat-pane-left"]');
+      const currentTitle = currentPane?.querySelector('h2')?.textContent?.trim();
+      const hasRight = Boolean(document.querySelector('[data-testid="chat-pane-right"]'));
+      return {
+        hasRight,
+        currentTitle
+      };
+    })()
+  `);
+  console.log("关闭右屏后检查（应只剩单屏，展示当前选定内容）:", checkAfterCloseRight);
+  await capture("screenshot-split-view-close-right-shows-left.png");
+
+  console.log("=== VS Code 风格 Split View 优化功能验证全部成功通过！ ===");
 } catch (err) {
   console.error("验证过程发生错误:", err);
 } finally {

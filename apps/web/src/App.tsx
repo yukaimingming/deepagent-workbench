@@ -478,8 +478,26 @@ export function App() {
     [state.threadId, hasThread, sessionsManager, cacheRemoteSessionState, loadState, newThread],
   );
 
-  // 关闭分屏
-  const handleCloseSplit = useCallback(() => {
+  // 若分屏展示的会话在列表中已被删除，则右屏自动回退为 null（派生状态，避免在 effect 中触发 cascading render）
+  const activeSplitSessionId = useMemo(() => {
+    if (!splitSessionId) return null;
+    if (sessions.length > 0 && !sessions.some((s) => s.id === splitSessionId)) {
+      return null;
+    }
+    return splitSessionId;
+  }, [splitSessionId, sessions]);
+
+  // 关闭左侧窗格：右侧窗格的内容成为唯一的全屏窗格（关闭左边就显示右边）
+  const handleCloseLeftPane = useCallback(() => {
+    if (!activeSplitSessionId) return;
+    const targetSessionId = activeSplitSessionId;
+    setActiveThread(targetSessionId);
+    sessionsManager.setActiveSessionId(targetSessionId);
+    setSplitSessionId(null);
+  }, [activeSplitSessionId, setActiveThread, sessionsManager]);
+
+  // 关闭右侧窗格：左侧窗格成为唯一的全屏窗格（关闭右边就显示左边）
+  const handleCloseRightPane = useCallback(() => {
     setSplitSessionId(null);
   }, []);
 
@@ -492,15 +510,6 @@ export function App() {
     sessionsManager.setActiveSessionId(oldRight);
     setSplitSessionId(oldLeft);
   }, [splitSessionId, state.threadId, setActiveThread, sessionsManager]);
-
-  // 若分屏展示的会话在列表中已被删除，则右屏自动回退为 null（派生状态，避免在 effect 中触发 cascading render）
-  const activeSplitSessionId = useMemo(() => {
-    if (!splitSessionId) return null;
-    if (sessions.length > 0 && !sessions.some((s) => s.id === splitSessionId)) {
-      return null;
-    }
-    return splitSessionId;
-  }, [splitSessionId, sessions]);
 
   // 人工审批操作（左屏）
   const handleDecide = (activityId: string, decision: "approve" | "reject"): void => {
@@ -663,7 +672,9 @@ export function App() {
       handleNewSession,
       handleSubmitDecisions,
       handleOpenSplitWithSession,
-      handleCloseSplit,
+      handleCloseSplit: handleCloseRightPane,
+      handleCloseLeftPane,
+      handleCloseRightPane,
       handleSwapPanes,
       sessionsManager,
     };
@@ -753,6 +764,7 @@ export function App() {
             onEditMessage={handleEditMessage}
             onDecide={handleDecide}
             onSubmitDecisions={handleSubmitDecisions}
+            onCloseSplit={handleCloseLeftPane}
             onSwapPanes={handleSwapPanes}
             isSidebarOpen={isSidebarOpen}
             onToggleSidebar={toggleSidebar}
@@ -802,7 +814,7 @@ export function App() {
               onEditMessage={handleEditMessageRight}
               onDecide={handleDecideRight}
               onSubmitDecisions={handleSubmitDecisionsRight}
-              onCloseSplit={handleCloseSplit}
+              onCloseSplit={handleCloseRightPane}
               onSwapPanes={handleSwapPanes}
               onDropSession={(droppedId) => {
                 if (droppedId !== splitSessionId) {

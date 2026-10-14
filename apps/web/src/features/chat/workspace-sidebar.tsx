@@ -178,34 +178,25 @@ export function WorkspaceSidebar({
           event.dataTransfer.effectAllowed = "copyMove";
         }}
         onClick={() => onSelectSession(session.id)}
-        className={`group/session sidebar-session-item relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-grab active:cursor-grabbing transition-colors ${
-          isActive
+        className={`group/session sidebar-session-item relative flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] cursor-pointer transition-colors ${
+          isActive || isSplit
             ? "bg-zinc-800 text-white font-medium shadow-xs"
-            : isSplit
-              ? "bg-sky-950/40 text-sky-200 border border-sky-800/50 hover:bg-sky-950/60"
-              : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+            : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
         }`}
         data-active={isActive ? "true" : "false"}
         data-split={isSplit ? "true" : "false"}
         data-session-id={session.id}
-        title="点击切换会话，或按住拖拽至右侧分屏显示"
+        title="点击切换会话，或按住拖拽分屏并排显示"
       >
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           {isSessionRunning ? (
             <span className="size-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="正在执行中" />
-          ) : isActive ? (
-            <span className="size-2 rounded-full bg-zinc-200 shrink-0" title="当前主屏" />
-          ) : isSplit ? (
-            <span className="size-2 rounded-full bg-sky-400 shrink-0" title="当前分屏" />
+          ) : isActive || isSplit ? (
+            <span className="size-2 rounded-full bg-zinc-200 shrink-0" title="当前打开" />
           ) : (
             <span className="size-2 rounded-full border border-zinc-500 shrink-0" />
           )}
           <span className="truncate text-[12.5px]">{session.title}</span>
-          {isSplit && (
-            <span className="shrink-0 rounded bg-sky-900/60 px-1 py-0.5 text-[10px] text-sky-300 border border-sky-700/40 font-mono">
-              分屏
-            </span>
-          )}
           {isSessionRunning && <span className="shrink-0 text-[10.5px] text-emerald-400/80">执行中</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0 ml-1">

@@ -138,7 +138,7 @@ export function ChatPane({
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-sky-950/40 backdrop-blur-[2px] border-2 border-dashed border-sky-400/80">
           <div className="flex items-center gap-2 rounded-xl bg-zinc-900/90 px-4 py-2 text-sm font-medium text-sky-200 shadow-xl border border-sky-600/40">
             <Columns2Icon className="size-4 text-sky-400" />
-            <span>放置以在{paneId === "left" ? "左侧主屏" : "右侧分屏"}打开此会话</span>
+            <span>放置以在此处打开对话</span>
           </div>
         </div>
       )}
@@ -158,18 +158,6 @@ export function ChatPane({
             </button>
           )}
 
-          {isSplit && (
-            <span
-              className={`rounded px-1.5 py-0.5 text-[10.5px] font-mono font-medium border ${
-                paneId === "left"
-                  ? "bg-zinc-900 text-zinc-300 border-zinc-700/60"
-                  : "bg-sky-950/70 text-sky-300 border-sky-700/60"
-              }`}
-            >
-              {paneId === "left" ? "主屏" : "分屏"}
-            </span>
-          )}
-
           <h2 className="truncate text-[13px] font-medium text-zinc-300" title={sessionTitle}>
             {sessionTitle}
           </h2>
@@ -184,14 +172,14 @@ export function ChatPane({
             </div>
           )}
 
-          {isSplit && paneId === "right" && (
+          {isSplit && (
             <div className="flex items-center gap-1 ml-1">
-              {onSwapPanes && (
+              {paneId === "right" && onSwapPanes && (
                 <button
                   type="button"
                   onClick={onSwapPanes}
                   className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors text-[11px]"
-                  title="与左屏互换位置"
+                  title="互换两栏位置"
                 >
                   <Columns2Icon className="size-3.5" />
                 </button>
@@ -201,7 +189,7 @@ export function ChatPane({
                   type="button"
                   onClick={onCloseSplit}
                   className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
-                  title="关闭右侧分屏"
+                  title="关闭此窗格"
                 >
                   <XIcon className="size-3.5" />
                 </button>
