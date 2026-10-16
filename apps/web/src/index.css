@@ -450,9 +450,54 @@ html.light .composer-menu .text-zinc-400,
 html.light .composer-menu .text-zinc-600 {
   color: #64748b !important;
 }
-html.light .composer-menu .text-orange-400 {
-  color: #c2410c !important;
+/* 完全访问权限：在浅色与深色模式下均保持醒目的纯正红色 */
+.composer-menu [data-permission-mode="full"],
+html.light .composer-menu [data-permission-mode="full"] {
+  color: #ef4444 !important;
 }
+.composer-menu [data-permission-mode="full"] span,
+html.light .composer-menu [data-permission-mode="full"] span {
+  color: #ef4444 !important;
+}
+.composer-menu [data-permission-mode="full"] svg,
+html.light .composer-menu [data-permission-mode="full"] svg {
+  color: #ef4444 !important;
+}
+.composer-menu [data-permission-mode="full"][aria-pressed="true"],
+html.light .composer-menu [data-permission-mode="full"][aria-pressed="true"] {
+  background-color: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+  color: #ef4444 !important;
+}
+.composer-menu [data-permission-mode="full"]:hover,
+html.light .composer-menu [data-permission-mode="full"]:hover {
+  background-color: rgba(239, 68, 68, 0.08) !important;
+}
+.composer-selector[data-permission-mode="full"],
+html.light .composer-selector[data-permission-mode="full"] {
+  color: #ef4444 !important;
+}
+.composer-selector[data-permission-mode="full"] span,
+html.light .composer-selector[data-permission-mode="full"] span {
+  color: #ef4444 !important;
+}
+.composer-selector[data-permission-mode="full"] svg,
+html.light .composer-selector[data-permission-mode="full"] svg {
+  color: #ef4444 !important;
+}
+
+/* 侧边栏会话项消息图标浅色适配 */
+html.light .sidebar-session-item[data-active="true"] svg:not(.animate-spin),
+html.light .sidebar-session-item[data-split="true"] svg:not(.animate-spin) {
+  color: #0f172a !important;
+}
+html.light .sidebar-session-item[data-active="false"] svg:not(.animate-spin) {
+  color: #64748b !important;
+}
+html.light .sidebar-session-item[data-active="false"]:hover svg:not(.animate-spin) {
+  color: #0f172a !important;
+}
+
 html.light .new-chat-sidebar-button {
   background-color: #f1f5f9 !important;
   color: #0f172a !important;

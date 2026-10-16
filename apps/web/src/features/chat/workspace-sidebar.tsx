@@ -25,7 +25,10 @@ import {
   SearchIcon,
   AlertTriangleIcon,
   PencilIcon,
+  MessageSquareIcon,
 } from "lucide-react";
+import { cn } from "cn";
+import { Spinner } from "@/components/ui/spinner";
 import type { FolderGroup, SessionSummary } from "./use-sessions.js";
 import { FolderPickerModal } from "./folder-picker-modal.js";
 
@@ -190,14 +193,20 @@ export function WorkspaceSidebar({
       >
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           {isSessionRunning ? (
-            <span className="size-2 rounded-full bg-emerald-400 animate-pulse shrink-0" title="正在执行中" />
-          ) : isActive || isSplit ? (
-            <span className="size-2 rounded-full bg-zinc-200 shrink-0" title="当前打开" />
+            <span title="正在执行中" className="inline-flex shrink-0">
+              <Spinner className="size-3.5 text-emerald-400 shrink-0" />
+            </span>
           ) : (
-            <span className="size-2 rounded-full border border-zinc-500 shrink-0" />
+            <MessageSquareIcon
+              className={cn(
+                "size-3.5 shrink-0 transition-colors",
+                isActive || isSplit
+                  ? "text-zinc-200"
+                  : "text-zinc-500 group-hover/session:text-zinc-300",
+              )}
+            />
           )}
           <span className="truncate text-[12.5px]">{session.title}</span>
-          {isSessionRunning && <span className="shrink-0 text-[10.5px] text-emerald-400/80">执行中</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0 ml-1">
           <span className="text-[11px] text-zinc-500 tabular-nums select-none session-time">

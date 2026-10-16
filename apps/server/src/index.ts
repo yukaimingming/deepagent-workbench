@@ -62,7 +62,7 @@ const cli = parseArgs(process.argv.slice(2));
 
 const app = await createApp({
   host: cli.host ?? process.env.DEEPAGENT_HOST ?? "127.0.0.1",
-  port: cli.port ?? (process.env.DEEPAGENT_PORT ? Number(process.env.DEEPAGENT_PORT) : 8788),
+  port: cli.port ?? (process.env.DEEPAGENT_PORT ? Number(process.env.DEEPAGENT_PORT) : 8789),
   dataDir: cli.dataDir ?? process.env.DEEPAGENT_DATA_DIR ?? resolve(repoRoot, ".data"),
   workspaceRoot:
     cli.workspaceRoot ?? process.env.DEEPAGENT_WORKSPACE ?? resolve(repoRoot, "workspace"),

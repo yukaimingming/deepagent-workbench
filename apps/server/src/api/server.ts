@@ -107,7 +107,7 @@ const runAgentInputSchema = z.object({
 
 export async function createApp(options: ServerOptions) {
   const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? 8788;
+  const port = options.port ?? 8789;
   const dataDir = resolve(options.dataDir);
   let currentWorkspaceRoot = resolve(options.workspaceRoot);
   const processStartedAt = new Date().toISOString();

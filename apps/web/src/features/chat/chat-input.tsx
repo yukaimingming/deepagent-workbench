@@ -446,53 +446,67 @@ export function ChatInput({
                   <button
                     type="button"
                     data-testid="permission-mode-selector"
+                    data-permission-mode={permissionMode}
                     aria-label={`权限模式：${PERMISSION_OPTIONS.find((option) => option.mode === permissionMode)?.label ?? "请求批准"}`}
                     onClick={() => {
                       setIsPermissionDropdownOpen((open) => !open);
                       setIsModelDropdownOpen(false);
                       setIsEffortDropdownOpen(false);
                     }}
-                    className="composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-zinc-300 transition-colors hover:bg-zinc-800/70 hover:text-white border-0 border-none outline-none focus:outline-none shadow-none"
+                    className={cn(
+                      "composer-selector flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 transition-colors border-0 border-none outline-none focus:outline-none shadow-none",
+                      permissionMode === "full"
+                        ? "text-red-500 hover:bg-red-500/10 hover:text-red-400 font-semibold"
+                        : "text-zinc-300 hover:bg-zinc-800/70 hover:text-white font-medium",
+                    )}
                     title="选择本次及后续运行的工具审批方式"
                   >
                     {(() => {
                       const option = PERMISSION_OPTIONS.find((item) => item.mode === permissionMode) ?? PERMISSION_OPTIONS[0]!;
-                      return <option.Icon className={cn("size-3.5 shrink-0", permissionMode === "full" ? "text-orange-400" : "text-zinc-400")} />;
+                      return <option.Icon className={cn("size-3.5 shrink-0", permissionMode === "full" ? "text-red-500" : "text-zinc-400")} />;
                     })()}
-                    <span className="text-[11.5px] font-medium">
+                    <span className={cn("text-[11.5px]", permissionMode === "full" ? "text-red-500 font-semibold" : "font-medium")}>
                       {PERMISSION_OPTIONS.find((option) => option.mode === permissionMode)?.label ?? "请求批准"}
                     </span>
-                    <ChevronDownIcon className={cn("size-3 text-zinc-500 transition-transform", isPermissionDropdownOpen && "rotate-180")} />
+                    <ChevronDownIcon className={cn("size-3 transition-transform", permissionMode === "full" ? "text-red-500/80" : "text-zinc-500", isPermissionDropdownOpen && "rotate-180")} />
                   </button>
 
                   {isPermissionDropdownOpen && (
                     <div className="workspace-dropdown-panel composer-menu absolute bottom-full left-0 z-50 mb-2 w-[min(21rem,calc(100vw-2rem))] rounded-xl border border-zinc-700/70 bg-[#242427] p-1.5 shadow-2xl animate-in fade-in zoom-in-95 duration-100">
                       {PERMISSION_OPTIONS.map(({ mode, label, description, Icon }) => {
                         const isSelected = permissionMode === mode;
+                        const isFull = mode === "full";
                         return (
                           <button
                             key={mode}
                             type="button"
                             data-testid={`permission-mode-${mode}`}
+                            data-permission-mode={mode}
                             aria-pressed={isSelected}
                             onClick={() => {
                               selectPermissionMode(mode);
                             }}
                             className={cn(
                               "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors",
-                              isSelected ? "bg-[#2f2f35]" : "hover:bg-[#2f2f35]",
+                              isFull
+                                ? isSelected
+                                  ? "bg-red-500/15 border border-red-500/35 text-red-500 shadow-xs"
+                                  : "text-red-500 hover:bg-red-500/10 border border-transparent"
+                                : isSelected
+                                  ? "bg-[#2f2f35] text-zinc-100 border border-transparent"
+                                  : "hover:bg-[#2f2f35] text-zinc-300 border border-transparent",
                             )}
                           >
-                            <Icon className={cn("size-5 shrink-0", mode === "full" ? "text-orange-400" : "text-zinc-300")} />
+                            <Icon className={cn("size-5 shrink-0", isFull ? "text-red-500" : "text-zinc-300")} />
                             <span className="min-w-0 flex-1">
-                              <span className={cn("block text-[13px] font-medium", mode === "full" && "text-orange-400")}>
+                              <span className={cn("block text-[13px] font-medium", isFull ? "text-red-500 font-semibold" : "")}>
                                 {label}
                               </span>
-                              <span className="block text-[11.5px] leading-snug text-zinc-400">
+                              <span className={cn("block text-[11.5px] leading-snug", isFull ? "text-red-400" : "text-zinc-400")}>
                                 {description}
                               </span>
                             </span>
-                            {isSelected && <CheckIcon className={cn("size-4 shrink-0", mode === "full" ? "text-orange-400" : "text-zinc-200")} />}
+                            {isSelected && <CheckIcon className={cn("size-4 shrink-0", isFull ? "text-red-500" : "text-zinc-200")} />}
                           </button>
                         );
                       })}

@@ -18,11 +18,11 @@ export default defineConfig({
     proxy: {
       // 服务端 API 与 AG-UI 端点都通过代理转发，避免 CORS 与端口硬编码。
       "/api": {
-        target: "http://127.0.0.1:8788",
+        target: "http://127.0.0.1:8789",
         changeOrigin: false,
       },
       "/agent": {
-        target: "http://127.0.0.1:8788",
+        target: "http://127.0.0.1:8789",
         changeOrigin: false,
       },
     },
@@ -31,8 +31,8 @@ export default defineConfig({
     port: 5175,
     host: "127.0.0.1",
     proxy: {
-      "/api": { target: "http://127.0.0.1:8788", changeOrigin: false },
-      "/agent": { target: "http://127.0.0.1:8788", changeOrigin: false },
+      "/api": { target: "http://127.0.0.1:8789", changeOrigin: false },
+      "/agent": { target: "http://127.0.0.1:8789", changeOrigin: false },
     },
   },
   build: {
