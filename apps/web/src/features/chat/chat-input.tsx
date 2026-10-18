@@ -43,6 +43,7 @@ import {
   PromptInputSubmit,
   type PromptInputMessage,
   usePromptInputAttachments,
+  usePromptInputController,
 } from "../../components/ai-elements/prompt-input.js";
 import {
   REASONING_EFFORTS,
@@ -216,7 +217,7 @@ function PromptInputActionsRight({
   );
 }
 
-export function ChatInput({
+function ChatInputContent({
   messages = [],
   activities = [],
   onSend,
@@ -243,6 +244,7 @@ export function ChatInput({
   permissionMode,
   onPermissionModeChange,
 }: ChatInputProps) {
+  const controller = usePromptInputController();
   const [text, setText] = useState("");
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
@@ -250,6 +252,16 @@ export function ChatInput({
   // 排队消息队列（参考截图在输入框中呈现）
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const prevIsRunningRef = useRef(isRunning);
+
+  // 彻底清空输入框文本与附件
+  const clearInputContent = () => {
+    controller.textInput.setInput("");
+    setText("");
+    const ta = document.querySelector<HTMLTextAreaElement>(".chat-prompt-textarea");
+    if (ta) {
+      ta.value = "";
+    }
+  };
 
   // 监听当前模型回复完成（isRunning 从 true 变为 false），自动流转发送排队消息
   useEffect(() => {
@@ -270,7 +282,8 @@ export function ChatInput({
 
   // 排队（将当前文本放入排队队列）
   const handleQueueMessage = (customText?: string, customFiles?: ChatAttachment[]) => {
-    const content = (customText !== undefined ? customText : text).trim();
+    const inputVal = customText !== undefined ? customText : (controller.textInput.value || text || "");
+    const content = inputVal.trim();
     const files = customFiles ?? [];
     if (!content && files.length === 0) return;
     const newMsg: QueuedMessage = {
@@ -279,19 +292,20 @@ export function ChatInput({
       attachments: files,
     };
     setQueuedMessages((prev) => [...prev, newMsg]);
-    setText("");
+    clearInputContent();
     setAttachmentError(null);
   };
 
   // 立即引导（打断当前正在回复的模型并立即发送新指令）
   const handleSteerNow = (customText?: string, customFiles?: ChatAttachment[]) => {
-    const content = (customText !== undefined ? customText : text).trim();
+    const inputVal = customText !== undefined ? customText : (controller.textInput.value || text || "");
+    const content = inputVal.trim();
     const files = customFiles ?? [];
     if (!content && files.length === 0) return;
     if (isRunning) {
       onStop();
     }
-    setText("");
+    clearInputContent();
     setAttachmentError(null);
     setTimeout(() => {
       onSend(content || "请执行引导指令。", files);
@@ -300,8 +314,14 @@ export function ChatInput({
 
   // 从排队中撤回编辑
   const handleEditQueued = (msg: QueuedMessage) => {
+    controller.textInput.setInput(msg.text);
     setText(msg.text);
     setQueuedMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    const ta = document.querySelector<HTMLTextAreaElement>(".chat-prompt-textarea");
+    if (ta) {
+      ta.value = msg.text;
+      ta.focus();
+    }
   };
 
   // 删除排队消息
@@ -417,10 +437,11 @@ export function ChatInput({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const hasText = text.trim().length > 0;
+  const currentInputText = controller.textInput.value || text;
+  const hasText = currentInputText.trim().length > 0;
 
   const handleSubmit = (message: PromptInputMessage) => {
-    const content = (message.text || text).trim();
+    const content = (message.text || controller.textInput.value || text).trim();
     const attachments = message.files;
     if ((content.length > 0 || attachments.length > 0) && !isRunning && !disabled) {
       const totalBytes = attachments.reduce((total, file) => {
@@ -437,7 +458,7 @@ export function ChatInput({
       }
       onSend(content || "请查看附件中的内容。", attachments);
       setAttachmentError(null);
-      setText("");
+      clearInputContent();
     }
   };
 
@@ -579,83 +600,82 @@ export function ChatInput({
           ) : null}
         </div>
 
-        <PromptInputProvider>
-          {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
-          <PromptInput
-            onSubmit={handleSubmit}
-            accept={ACCEPTED_ATTACHMENT_TYPES}
-            multiple
-            globalDrop
-            maxFiles={MAX_ATTACHMENT_COUNT}
-            maxFileSize={MAX_ATTACHMENT_SIZE}
-            onError={handleAttachmentError}
-            className="chat-prompt-input rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
-          >
-            {/* 排队消息列表（完全对齐用户上传图片样式） */}
-            {queuedMessages.length > 0 && (
-              <div className="px-3 pt-3 space-y-1.5">
-                {queuedMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className="chat-queue-card flex items-center justify-between rounded-xl bg-[#242427] border border-zinc-700/60 px-3 py-2 text-zinc-100 shadow-sm"
+        {/* 排队消息列表（完全对齐用户上传图片样式：显示在输入框外面的上方） */}
+        {queuedMessages.length > 0 && (
+          <div className="mb-2 space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-150">
+            {queuedMessages.map((msg) => (
+              <div
+                key={msg.id}
+                className="chat-queue-card flex items-center justify-between rounded-xl bg-[#242427] border border-zinc-700/60 px-3.5 py-2 text-zinc-100 shadow-md transition-all"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    className="size-4 shrink-0 text-zinc-400"
+                    aria-hidden="true"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        className="size-4 shrink-0 text-zinc-400"
-                        aria-hidden="true"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M8.5 10.5h7m-7 3h4.5M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-3.64-.69L3 21l1.45-3.62A7.854 7.854 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                        />
-                      </svg>
-                      <span className="truncate text-[13px] text-zinc-200 font-normal select-text">
-                        {msg.text || (msg.attachments.length > 0 ? `[包含 ${msg.attachments.length} 个附件]` : "")}
-                      </span>
-                    </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M8.5 10.5h7m-7 3h4.5M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-3.64-.69L3 21l1.45-3.62A7.854 7.854 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                    />
+                  </svg>
+                  <span className="truncate text-[13px] text-zinc-200 font-normal select-text">
+                    {msg.text || (msg.attachments.length > 0 ? `[包含 ${msg.attachments.length} 个附件]` : "")}
+                  </span>
+                </div>
 
-                    <div className="flex items-center gap-1 shrink-0 text-zinc-400">
-                      {/* 撤回编辑 */}
-                      <button
-                        type="button"
-                        onClick={() => handleEditQueued(msg)}
-                        title="撤回并编辑"
-                        className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/50 transition-colors cursor-pointer"
-                      >
-                        <SquarePenIcon className="size-3.5" />
-                      </button>
-                      {/* 删除 */}
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteQueued(msg.id)}
-                        title="删除排队消息"
-                        className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
-                      >
-                        <Trash2Icon className="size-3.5" />
-                      </button>
-                      {/* 立即引导/发送 */}
-                      <button
-                        type="button"
-                        onClick={() => handleSendQueuedNow(msg)}
-                        title="立即引导（打断当前回复并立即发送）"
-                        className="size-7 flex items-center justify-center rounded-lg text-zinc-300 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
-                      >
-                        <ArrowUpIcon className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                <div className="flex items-center gap-1 shrink-0 text-zinc-400">
+                  {/* 撤回编辑 */}
+                  <button
+                    type="button"
+                    onClick={() => handleEditQueued(msg)}
+                    title="撤回并编辑"
+                    className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/50 transition-colors cursor-pointer"
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </button>
+                  {/* 删除 */}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteQueued(msg.id)}
+                    title="删除排队消息"
+                    className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </button>
+                  {/* 立即引导/发送 */}
+                  <button
+                    type="button"
+                    onClick={() => handleSendQueuedNow(msg)}
+                    title="立即引导（打断当前回复并立即发送）"
+                    className="size-7 flex items-center justify-center rounded-lg text-zinc-300 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                  >
+                    <ArrowUpIcon className="size-3.5" />
+                  </button>
+                </div>
               </div>
-            )}
+            ))}
+          </div>
+        )}
 
-            <PromptInputHeader className="px-3 pt-3">
-              <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
-            </PromptInputHeader>
+        {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
+        <PromptInput
+          onSubmit={handleSubmit}
+          accept={ACCEPTED_ATTACHMENT_TYPES}
+          multiple
+          globalDrop
+          maxFiles={MAX_ATTACHMENT_COUNT}
+          maxFileSize={MAX_ATTACHMENT_SIZE}
+          onError={handleAttachmentError}
+          className="chat-prompt-input rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
+        >
+          <PromptInputHeader className="px-3 pt-3">
+            <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
+          </PromptInputHeader>
             <PromptInputBody>
               <PromptInputTextarea
                 value={text}
@@ -954,7 +974,6 @@ export function ChatInput({
               {attachmentError}
             </p>
           )}
-        </PromptInputProvider>
 
         {/* Token 与耗时统计条：移至输入框最下方展示 */}
         <div className="mt-2 px-1">
@@ -1049,3 +1068,12 @@ export function ChatInput({
     </div>
   );
 }
+
+export function ChatInput(props: ChatInputProps) {
+  return (
+    <PromptInputProvider>
+      <ChatInputContent {...props} />
+    </PromptInputProvider>
+  );
+}
+
