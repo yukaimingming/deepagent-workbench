@@ -600,82 +600,87 @@ function ChatInputContent({
           ) : null}
         </div>
 
-        {/* 排队消息列表（完全对齐用户上传图片样式：显示在输入框外面的上方） */}
-        {queuedMessages.length > 0 && (
-          <div className="mb-2 space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-150">
-            {queuedMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className="chat-queue-card flex items-center justify-between rounded-xl bg-[#242427] border border-zinc-700/60 px-3.5 py-2 text-zinc-100 shadow-md transition-all"
-              >
-                <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    className="size-4 shrink-0 text-zinc-400"
-                    aria-hidden="true"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M8.5 10.5h7m-7 3h4.5M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-3.64-.69L3 21l1.45-3.62A7.854 7.854 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                  <span className="truncate text-[13px] text-zinc-200 font-normal select-text">
-                    {msg.text || (msg.attachments.length > 0 ? `[包含 ${msg.attachments.length} 个附件]` : "")}
-                  </span>
-                </div>
+        {/* 输入框与背面折叠卡片层叠容器 */}
+        <div className="chat-input-stack-container relative">
+          {/* 排队消息列表：显示在输入框的背面，像折叠卡片一样从输入框背后探出 */}
+          {queuedMessages.length > 0 && (
+            <div className="chat-queue-stack relative z-0 mx-3 sm:mx-4 -mb-3.5 space-y-[-14px] animate-in fade-in slide-in-from-bottom-2 duration-150">
+              {queuedMessages.map((msg, index) => (
+                <div
+                  key={msg.id}
+                  className="chat-queue-card flex items-center justify-between rounded-t-2xl border-t border-x border-zinc-700/60 bg-[#242428] px-4 pt-2.5 pb-4 text-zinc-100 shadow-md transition-all select-none"
+                  style={{
+                    zIndex: index,
+                  }}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      className="size-4 shrink-0 text-zinc-400"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M8.5 10.5h7m-7 3h4.5M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-3.64-.69L3 21l1.45-3.62A7.854 7.854 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                      />
+                    </svg>
+                    <span className="truncate text-[13px] text-zinc-200 font-normal select-text">
+                      {msg.text || (msg.attachments.length > 0 ? `[包含 ${msg.attachments.length} 个附件]` : "")}
+                    </span>
+                  </div>
 
-                <div className="flex items-center gap-1 shrink-0 text-zinc-400">
-                  {/* 撤回编辑 */}
-                  <button
-                    type="button"
-                    onClick={() => handleEditQueued(msg)}
-                    title="撤回并编辑"
-                    className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/50 transition-colors cursor-pointer"
-                  >
-                    <SquarePenIcon className="size-3.5" />
-                  </button>
-                  {/* 删除 */}
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteQueued(msg.id)}
-                    title="删除排队消息"
-                    className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </button>
-                  {/* 立即引导/发送 */}
-                  <button
-                    type="button"
-                    onClick={() => handleSendQueuedNow(msg)}
-                    title="立即引导（打断当前回复并立即发送）"
-                    className="size-7 flex items-center justify-center rounded-lg text-zinc-300 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
-                  >
-                    <ArrowUpIcon className="size-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0 text-zinc-400">
+                    {/* 撤回编辑 */}
+                    <button
+                      type="button"
+                      onClick={() => handleEditQueued(msg)}
+                      title="撤回并编辑"
+                      className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/50 transition-colors cursor-pointer"
+                    >
+                      <SquarePenIcon className="size-3.5" />
+                    </button>
+                    {/* 删除 */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteQueued(msg.id)}
+                      title="删除排队消息"
+                      className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </button>
+                    {/* 立即引导/发送 */}
+                    <button
+                      type="button"
+                      onClick={() => handleSendQueuedNow(msg)}
+                      title="立即引导（打断当前回复并立即发送）"
+                      className="size-7 flex items-center justify-center rounded-lg text-zinc-300 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                    >
+                      <ArrowUpIcon className="size-3.5" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
 
-        {/* 纯暗黑极简边框：无任何刺眼白色外框，深邃内敛 */}
-        <PromptInput
-          onSubmit={handleSubmit}
-          accept={ACCEPTED_ATTACHMENT_TYPES}
-          multiple
-          globalDrop
-          maxFiles={MAX_ATTACHMENT_COUNT}
-          maxFileSize={MAX_ATTACHMENT_SIZE}
-          onError={handleAttachmentError}
-          className="chat-prompt-input rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
-        >
-          <PromptInputHeader className="px-3 pt-3">
-            <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
-          </PromptInputHeader>
+          {/* 纯暗黑极简边框：输入框本体处于前景 relative z-10，不透明背景挡住背面排队卡片底部 */}
+          <PromptInput
+            onSubmit={handleSubmit}
+            accept={ACCEPTED_ATTACHMENT_TYPES}
+            multiple
+            globalDrop
+            maxFiles={MAX_ATTACHMENT_COUNT}
+            maxFileSize={MAX_ATTACHMENT_SIZE}
+            onError={handleAttachmentError}
+            className="chat-prompt-input relative z-10 rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
+          >
+            <PromptInputHeader className="px-3 pt-3">
+              <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
+            </PromptInputHeader>
             <PromptInputBody>
               <PromptInputTextarea
                 value={text}
@@ -974,6 +979,7 @@ function ChatInputContent({
               {attachmentError}
             </p>
           )}
+        </div>
 
         {/* Token 与耗时统计条：移至输入框最下方展示 */}
         <div className="mt-2 px-1">
