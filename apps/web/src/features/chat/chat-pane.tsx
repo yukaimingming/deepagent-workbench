@@ -267,6 +267,8 @@ export function ChatPane({
 
         {/* 底部独立输入框 */}
         <ChatInput
+          messages={state.messages}
+          activities={state.activities}
           todoActivity={latestTodoActivity}
           onSend={onSend}
           onStop={onStop}

@@ -23,6 +23,10 @@ import {
   TriangleAlertIcon,
   TerminalSquareIcon,
   GlobeIcon,
+  Trash2Icon,
+  SquarePenIcon,
+  ArrowUpIcon,
+  SquareIcon,
 } from "lucide-react";
 import {
   PromptInput,
@@ -47,12 +51,22 @@ import {
   type ReasoningEffort,
   type RunTokenUsage,
 } from "@deepagent/shared";
+import type { ChatMessage } from "./client-reducer.js";
+import { StatsLine, ContextMeter } from "./session-stats.js";
 import { cn } from "../../lib/utils.js";
 import { extractFolderName } from "./use-sessions.js";
 import { ChatAttachmentGallery, ImagePreviewDialog, type ChatAttachment } from "./chat-attachments.js";
 import { TodoCard } from "./todo-card.js";
 
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  attachments: ChatAttachment[];
+}
+
 interface ChatInputProps {
+  messages?: ChatMessage[];
+  activities?: Activity[];
   onSend: (content: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
   isRunning: boolean;
@@ -138,16 +152,60 @@ function PromptInputAttachmentsDisplay({
   );
 }
 
-function PromptInputSubmitWithAttachments({
+function PromptInputActionsRight({
   hasText,
   isRunning,
   onStop,
+  onQueue,
+  onSteer,
 }: {
   hasText: boolean;
   isRunning: boolean;
   onStop: () => void;
+  onQueue: () => void;
+  onSteer: () => void;
 }) {
   const attachments = usePromptInputAttachments();
+  const canSend = hasText || attachments.files.length > 0;
+
+  // 当模型正在回复且输入框中有输入时：显示【排队】与【立即引导】操作按钮供用户自由选择
+  if (isRunning && canSend) {
+    return (
+      <div className="flex items-center gap-1.5 shrink-0">
+        {/* 排队按钮 */}
+        <button
+          type="button"
+          onClick={onQueue}
+          className="chat-queue-btn flex items-center gap-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 text-[12px] font-medium transition-colors border border-zinc-700/60 shadow-xs cursor-pointer select-none"
+          title="排队：等待当前模型回复完成后自动接着发送 (Enter)"
+        >
+          <span>排队</span>
+        </button>
+
+        {/* 立即引导按钮 */}
+        <button
+          type="button"
+          onClick={onSteer}
+          className="chat-steer-btn flex items-center gap-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/35 px-2.5 py-1 text-[12px] font-medium transition-colors shadow-xs cursor-pointer select-none"
+          title="立即引导：打断当前正在生成的回复，并立即发送新指令 (Ctrl+Enter)"
+        >
+          <ArrowUpIcon className="size-3.5" />
+          <span>立即引导</span>
+        </button>
+
+        {/* 停止当前生成按钮 */}
+        <button
+          type="button"
+          onClick={onStop}
+          className="chat-stop-btn flex items-center justify-center size-8 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 transition-colors shadow-xs cursor-pointer"
+          title="停止当前生成"
+        >
+          <SquareIcon className="size-3 fill-current" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <PromptInputSubmit
       disabled={!hasText && attachments.files.length === 0 && !isRunning}
@@ -159,6 +217,8 @@ function PromptInputSubmitWithAttachments({
 }
 
 export function ChatInput({
+  messages = [],
+  activities = [],
   onSend,
   onStop,
   isRunning,
@@ -187,8 +247,123 @@ export function ChatInput({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
 
-  // Token 用量悬浮面板
-  const [isUsageHover, setIsUsageHover] = useState(false);
+  // 排队消息队列（参考截图在输入框中呈现）
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const prevIsRunningRef = useRef(isRunning);
+
+  // 监听当前模型回复完成（isRunning 从 true 变为 false），自动流转发送排队消息
+  useEffect(() => {
+    if (prevIsRunningRef.current && !isRunning) {
+      if (queuedMessages.length > 0) {
+        const [nextMsg, ...remaining] = queuedMessages;
+        if (nextMsg) {
+          setQueuedMessages(remaining);
+          const timer = setTimeout(() => {
+            onSend(nextMsg.text || "请执行排队任务。", nextMsg.attachments);
+          }, 250);
+          return () => clearTimeout(timer);
+        }
+      }
+    }
+    prevIsRunningRef.current = isRunning;
+  }, [isRunning, queuedMessages, onSend]);
+
+  // 排队（将当前文本放入排队队列）
+  const handleQueueMessage = (customText?: string, customFiles?: ChatAttachment[]) => {
+    const content = (customText !== undefined ? customText : text).trim();
+    const files = customFiles ?? [];
+    if (!content && files.length === 0) return;
+    const newMsg: QueuedMessage = {
+      id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text: content,
+      attachments: files,
+    };
+    setQueuedMessages((prev) => [...prev, newMsg]);
+    setText("");
+    setAttachmentError(null);
+  };
+
+  // 立即引导（打断当前正在回复的模型并立即发送新指令）
+  const handleSteerNow = (customText?: string, customFiles?: ChatAttachment[]) => {
+    const content = (customText !== undefined ? customText : text).trim();
+    const files = customFiles ?? [];
+    if (!content && files.length === 0) return;
+    if (isRunning) {
+      onStop();
+    }
+    setText("");
+    setAttachmentError(null);
+    setTimeout(() => {
+      onSend(content || "请执行引导指令。", files);
+    }, 120);
+  };
+
+  // 从排队中撤回编辑
+  const handleEditQueued = (msg: QueuedMessage) => {
+    setText(msg.text);
+    setQueuedMessages((prev) => prev.filter((m) => m.id !== msg.id));
+  };
+
+  // 删除排队消息
+  const handleDeleteQueued = (id: string) => {
+    setQueuedMessages((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  // 立即发送排队中的某条消息（立即引导）
+  const handleSendQueuedNow = (msg: QueuedMessage) => {
+    if (isRunning) {
+      onStop();
+    }
+    setQueuedMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    setTimeout(() => {
+      onSend(msg.text || "请执行排队任务。", msg.attachments);
+    }, 120);
+  };
+
+  // 激活并发送全部排队消息（Cmd/Ctrl+Enter）
+  const handleFlushQueuedMessages = () => {
+    if (queuedMessages.length === 0) return;
+    const combinedText = queuedMessages.map((m) => m.text).filter(Boolean).join("\n\n");
+    const combinedFiles = queuedMessages.flatMap((m) => m.attachments);
+    if (isRunning) {
+      onStop();
+    }
+    setQueuedMessages([]);
+    setTimeout(() => {
+      onSend(combinedText || "请执行全部排队任务。", combinedFiles);
+    }, 120);
+  };
+
+  // 快捷键监听：Enter 排队，Ctrl+Enter 立即引导
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+
+    if (e.key === "Enter") {
+      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
+
+      if (isRunning) {
+        if (isCmdOrCtrl) {
+          e.preventDefault();
+          if (hasText) {
+            handleSteerNow();
+          } else if (queuedMessages.length > 0) {
+            handleFlushQueuedMessages();
+          }
+        } else if (!e.shiftKey) {
+          e.preventDefault();
+          if (hasText) {
+            handleQueueMessage();
+          }
+        }
+        return;
+      }
+
+      if (isCmdOrCtrl && !hasText && queuedMessages.length > 0) {
+        e.preventDefault();
+        handleFlushQueuedMessages();
+      }
+    }
+  };
 
   // 待办任务列表展开状态
   const [isTodoExpanded, setIsTodoExpanded] = useState(false);
@@ -416,6 +591,68 @@ export function ChatInput({
             onError={handleAttachmentError}
             className="chat-prompt-input rounded-2xl border border-zinc-800/80 bg-zinc-950/70 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
           >
+            {/* 排队消息列表（完全对齐用户上传图片样式） */}
+            {queuedMessages.length > 0 && (
+              <div className="px-3 pt-3 space-y-1.5">
+                {queuedMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className="chat-queue-card flex items-center justify-between rounded-xl bg-[#242427] border border-zinc-700/60 px-3 py-2 text-zinc-100 shadow-sm"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        className="size-4 shrink-0 text-zinc-400"
+                        aria-hidden="true"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M8.5 10.5h7m-7 3h4.5M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-3.64-.69L3 21l1.45-3.62A7.854 7.854 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                        />
+                      </svg>
+                      <span className="truncate text-[13px] text-zinc-200 font-normal select-text">
+                        {msg.text || (msg.attachments.length > 0 ? `[包含 ${msg.attachments.length} 个附件]` : "")}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0 text-zinc-400">
+                      {/* 撤回编辑 */}
+                      <button
+                        type="button"
+                        onClick={() => handleEditQueued(msg)}
+                        title="撤回并编辑"
+                        className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-700/50 transition-colors cursor-pointer"
+                      >
+                        <SquarePenIcon className="size-3.5" />
+                      </button>
+                      {/* 删除 */}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteQueued(msg.id)}
+                        title="删除排队消息"
+                        className="size-7 flex items-center justify-center rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                      >
+                        <Trash2Icon className="size-3.5" />
+                      </button>
+                      {/* 立即引导/发送 */}
+                      <button
+                        type="button"
+                        onClick={() => handleSendQueuedNow(msg)}
+                        title="立即引导（打断当前回复并立即发送）"
+                        className="size-7 flex items-center justify-center rounded-lg text-zinc-300 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+                      >
+                        <ArrowUpIcon className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <PromptInputHeader className="px-3 pt-3">
               <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
             </PromptInputHeader>
@@ -423,7 +660,14 @@ export function ChatInput({
               <PromptInputTextarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="输入任务描述...（Enter 发送，Shift+Enter 换行）"
+                onKeyDown={handleTextareaKeyDown}
+                placeholder={
+                  queuedMessages.length > 0
+                    ? "Cmd/Ctrl+Enter 激活发送全部排队消息"
+                    : isRunning
+                      ? "输入提示词...（Enter 排队，Ctrl+Enter 立即引导）"
+                      : "输入任务描述...（Enter 发送，Shift+Enter 换行）"
+                }
                 className="chat-prompt-textarea min-h-[50px] max-h-[220px] px-3.5 py-2.5 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-0 shadow-none focus-visible:ring-0 bg-transparent"
               />
             </PromptInputBody>
@@ -590,106 +834,12 @@ export function ChatInput({
                   )}
                 </div>
 
-                {/* Token 用量指示小圆圈：悬浮显示上下文与 Token 统计面板 */}
-                <div
-                  className="relative"
-                  onMouseEnter={() => setIsUsageHover(true)}
-                  onMouseLeave={() => setIsUsageHover(false)}
-                >
-                  <button
-                    type="button"
-                    aria-label="Token 用量"
-                    title="Token 用量"
-                    className={cn(
-                      "chat-token-usage-btn flex size-4 items-center justify-center rounded-full transition-colors cursor-pointer border-0 border-none outline-none focus:outline-none shadow-none",
-                      usage
-                        ? "bg-emerald-400/20 hover:bg-emerald-400/35"
-                        : "bg-zinc-800 hover:bg-zinc-700",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "chat-token-usage-dot size-1.5 rounded-full",
-                        usage ? "bg-emerald-400" : "bg-zinc-500",
-                      )}
-                    />
-                  </button>
-
-                  {isUsageHover && (
-                    <div className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-xl border border-zinc-800 bg-[#0c0c0e] p-3 shadow-2xl animate-in fade-in zoom-in-95 duration-100 text-left">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">
-                          Token 用量
-                        </span>
-                        <span className="text-[10px] text-zinc-600">
-                          {usage ? "最近一次运行" : "暂无数据"}
-                        </span>
-                      </div>
-
-                      {usage ? (
-                        <>
-                          {/* 上下文占用：最后一次模型调用的输入量 / 上下文窗口参考值 */}
-                          <div className="mb-2.5">
-                            <div className="flex items-center justify-between text-[11.5px] text-zinc-300 mb-1">
-                              <span>上下文占用</span>
-                              <span className="font-mono tabular-nums text-zinc-200">
-                                {usage.lastInputTokens.toLocaleString()}
-                                {usage.contextWindow
-                                  ? ` / 约 ${Math.round(usage.contextWindow / 1000)}K`
-                                  : " / —"}
-                              </span>
-                            </div>
-                            {usage.contextWindow ? (
-                              <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-emerald-400/80"
-                                  style={{
-                                    width: `${Math.min(100, (usage.lastInputTokens / usage.contextWindow) * 100)}%`,
-                                  }}
-                                />
-                              </div>
-                            ) : (
-                              <div className="text-[10px] text-zinc-600">
-                                当前模型上下文窗口大小未知，无法显示占比
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="space-y-1 text-[11.5px]">
-                            <div className="flex items-center justify-between">
-                              <span className="text-zinc-400">输入 Tokens</span>
-                              <span className="font-mono tabular-nums text-zinc-200">
-                                {usage.inputTokens.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-zinc-400">输出 Tokens</span>
-                              <span className="font-mono tabular-nums text-zinc-200">
-                                {usage.outputTokens.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-zinc-400">缓存命中</span>
-                              <span className="font-mono tabular-nums text-emerald-400/90">
-                                {usage.cachedInputTokens.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between pt-1 border-t border-zinc-800/80">
-                              <span className="text-zinc-300 font-medium">总计</span>
-                              <span className="font-mono tabular-nums text-zinc-100 font-medium">
-                                {usage.totalTokens.toLocaleString()}
-                              </span>
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-[11.5px] text-zinc-500 leading-relaxed">
-                          发起一次对话后，这里会显示该次运行的上下文占用、输入 / 输出 Token 与缓存命中情况。
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                {/* Token 用量指示器：参考 Microsoft agent 样式，点击才展开详细用量与上下文卡片 */}
+                <ContextMeter
+                  messages={messages}
+                  activities={activities}
+                  providedUsage={usage}
+                />
 
                 {/* 2. 思考等级下拉选择样式 */}
                 <div className="relative" ref={effortDropdownRef}>
@@ -789,11 +939,13 @@ export function ChatInput({
                 </div>
               </PromptInputTools>
 
-              {/* 右侧：官网标准的 PromptInputSubmit 提交/停止按钮 */}
-              <PromptInputSubmitWithAttachments
+              {/* 右侧：支持【排队】、【立即引导】与标准提交/停止按钮 */}
+              <PromptInputActionsRight
                 hasText={hasText}
                 isRunning={isRunning}
                 onStop={onStop}
+                onQueue={() => handleQueueMessage()}
+                onSteer={() => handleSteerNow()}
               />
             </PromptInputFooter>
           </PromptInput>
@@ -803,6 +955,15 @@ export function ChatInput({
             </p>
           )}
         </PromptInputProvider>
+
+        {/* Token 与耗时统计条：移至输入框最下方展示 */}
+        <div className="mt-2 px-1">
+          <StatsLine
+            messages={messages}
+            activities={activities}
+            providedUsage={usage}
+          />
+        </div>
       </div>
 
       <ImagePreviewDialog

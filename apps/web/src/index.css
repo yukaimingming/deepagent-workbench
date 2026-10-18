@@ -718,3 +718,122 @@ html.light .sidebar-session-item[data-active="true"] .session-time {
   font-weight: 500 !important;
 }
 
+/* ================= ContextMeter Token 用量弹层与胶囊深浅双色主题适配 ================= */
+.context-meter-btn {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+html.light .context-meter-btn {
+  background-color: transparent !important;
+  border: none !important;
+  color: #475569 !important;
+}
+html.light .context-meter-btn:hover {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+html.light .context-meter-btn.text-emerald-400 {
+  color: #059669 !important;
+}
+html.light .context-meter-btn.text-emerald-400:hover {
+  background-color: rgba(16, 185, 129, 0.1) !important;
+  color: #047857 !important;
+}
+html.light .context-meter-dialog {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+}
+html.light .context-meter-dialog .text-zinc-200,
+html.light .context-meter-dialog .text-zinc-300,
+html.light .context-meter-dialog .text-zinc-100 {
+  color: #0f172a !important;
+}
+html.light .context-meter-dialog .text-zinc-400,
+html.light .context-meter-dialog .text-zinc-500 {
+  color: #64748b !important;
+}
+html.light .context-meter-dialog .bg-zinc-800\/80 {
+  background-color: #e2e8f0 !important;
+}
+html.light .context-meter-dialog .border-zinc-800\/70,
+html.light .context-meter-dialog .border-zinc-800\/60 {
+  border-color: #e2e8f0 !important;
+}
+
+/* ================= 排队消息卡片与输入框底栏统计条（StatsLine）深浅双色主题适配 ================= */
+.chat-queue-card {
+  transition: all 0.15s ease-in-out;
+}
+html.light .chat-queue-card {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+}
+html.light .chat-queue-card .text-zinc-200,
+html.light .chat-queue-card .text-zinc-100 {
+  color: #0f172a !important;
+}
+html.light .chat-queue-card .text-zinc-400 {
+  color: #64748b !important;
+}
+html.light .chat-queue-card button {
+  color: #64748b !important;
+}
+html.light .chat-queue-card button:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+html.light .chat-queue-card button:hover.text-red-400 {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+  color: #ef4444 !important;
+}
+html.light .chat-queue-card button:hover.text-zinc-300 {
+  background-color: rgba(16, 185, 129, 0.1) !important;
+  color: #059669 !important;
+}
+
+/* 浅色主题下的排队与立即引导按钮 */
+html.light .chat-queue-btn {
+  background-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+html.light .chat-queue-btn:hover {
+  background-color: #cbd5e1 !important;
+}
+html.light .chat-steer-btn {
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+  color: #047857 !important;
+}
+html.light .chat-steer-btn:hover {
+  background-color: rgba(16, 185, 129, 0.25) !important;
+}
+html.light .chat-stop-btn {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+  color: #b91c1c !important;
+}
+html.light .chat-stop-btn:hover {
+  background-color: rgba(239, 68, 68, 0.25) !important;
+}
+
+/* StatsLine 浅色模式适配 */
+html.light .stats-line {
+  color: #64748b !important;
+}
+html.light .stats-line:hover {
+  color: #334155 !important;
+}
+html.light .stats-line [data-slot="tooltip-content"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+
+
