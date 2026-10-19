@@ -162,15 +162,12 @@ export function TodoCard({ activity, isOpen: controlledOpen, onToggleOpen, onClo
                     )}
                     <QueueItemContent
                       completed={isCompleted}
-                      className={cn(
-                        isCompleted && "text-zinc-500 line-through",
-                        isRunning && "shimmer shimmer-color-blue-500/60 font-medium",
-                      )}
+                      className={cn(isCompleted && "text-zinc-500 line-through")}
                     >
                       {item.content}
                     </QueueItemContent>
                     {isRunning && (
-                      <span className="shimmer shimmer-color-blue-500/60 ml-auto shrink-0 text-[11px] font-medium select-none">
+                      <span className="ml-auto shrink-0 text-[11px] text-blue-400/90 animate-pulse select-none">
                         执行中
                       </span>
                     )}

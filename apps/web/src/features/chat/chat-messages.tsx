@@ -657,17 +657,13 @@ export function ChatMessages({
                   {shouldShowMessageContent && (
                     <Message from="assistant" className="w-full">
                       <MessageContent className="text-zinc-100 w-full text-[14px]">
-                        {message.streaming && message.content.length === 0 ? (
-                          <p className="shimmer shimmer-color-blue-500/60 text-[13.5px]">
-                            Generating response&hellip;
-                          </p>
-                        ) : message.content.length > 0 ? (
+                        {message.content.length > 0 && (
                           <div className={cn("w-full text-zinc-100", message.streaming && "streaming-caret")}>
                             <MessageResponse mode="static" isAnimating={message.streaming}>
                               {message.content}
                             </MessageResponse>
                           </div>
-                        ) : null}
+                        )}
                       </MessageContent>
 
                       {/* 消息底部操作工具条（复制、重试） */}

@@ -41,18 +41,11 @@ export function SubagentCard({ activity }: SubagentCardProps) {
           )}
         />
         <span className="text-xs text-zinc-300 truncate">
-          {isRunning ? (
-            <span className="shimmer shimmer-color-blue-500/60">
-              正在派发子 Agent：<span className="font-medium">{name}</span>
-            </span>
-          ) : isFailed ? (
-            <>子 Agent 失败：<span className="text-zinc-100 font-medium">{name}</span></>
-          ) : (
-            <>子 Agent 已完成：<span className="text-zinc-100 font-medium">{name}</span></>
-          )}
+          {isRunning ? "正在派发子 Agent：" : isFailed ? "子 Agent 失败：" : "子 Agent 已完成："}
+          <span className="text-zinc-100 font-medium">{name}</span>
         </span>
         {isRunning ? (
-          <span className="shimmer shimmer-color-blue-500/60 ml-auto shrink-0 text-[11px] font-medium">运行中</span>
+          <span className="ml-auto shrink-0 text-[11px] text-blue-400/90 animate-pulse">运行中</span>
         ) : isFailed ? (
           <span className="ml-auto shrink-0 text-[11px] text-red-400">失败</span>
         ) : (
