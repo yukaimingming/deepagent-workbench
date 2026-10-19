@@ -195,9 +195,9 @@ export const WebPreviewBody = ({
   const { url } = useWebPreview();
 
   return (
-    <div className="flex-1">
+    <div className="flex flex-1 flex-col size-full min-h-0 overflow-hidden">
       <iframe
-        className={cn("size-full", className)}
+        className={cn("size-full flex-1 border-0", className)}
         // oxlint-disable-next-line eslint-plugin-react(iframe-missing-sandbox)
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
         src={(src ?? url) || undefined}

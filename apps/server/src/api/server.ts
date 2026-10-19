@@ -233,6 +233,56 @@ export async function createApp(options: ServerOptions) {
       return;
     }
 
+    if (method === "GET" && path === "/api/web-preview/proxy") {
+      const targetUrl = url.searchParams.get("url");
+      if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        sendJson(res, 400, { error: "无效的 URL" });
+        return;
+      }
+
+      try {
+        const fetchResponse = await (fetchImpl ?? fetch)(targetUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+
+        const rawContentType = fetchResponse.headers.get("content-type") || "text/html; charset=utf-8";
+        
+        if (rawContentType.includes("text/html")) {
+          let html = await fetchResponse.text();
+          // 注入 <base href="..."> 保证相对链接、图片、样式正常加载
+          const baseTag = `<base href="${targetUrl}">`;
+          if (/<head[^>]*>/i.test(html)) {
+            html = html.replace(/<head[^>]*>/i, (m) => `${m}\n  ${baseTag}`);
+          } else {
+            html = `${baseTag}\n${html}`;
+          }
+
+          res.writeHead(200, {
+            "Content-Type": rawContentType,
+            "Access-Control-Allow-Origin": "*",
+          });
+          res.end(html);
+        } else {
+          const buffer = Buffer.from(await fetchResponse.arrayBuffer());
+          res.writeHead(200, {
+            "Content-Type": rawContentType,
+            "Access-Control-Allow-Origin": "*",
+          });
+          res.end(buffer);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:32px;color:#666;text-align:center;"><h3>无法直接内嵌代理该网页</h3><p style="font-size:13px;color:#999;margin-top:8px;">${errMsg}</p><p style="margin-top:16px;"><a href="${targetUrl}" target="_blank" rel="noopener noreferrer" style="color:#0284c7;text-decoration:none;font-size:14px;font-weight:500;">在新标签页中打开原网站 ↗</a></p></body></html>`);
+      }
+      return;
+    }
+
     if (method === "GET" && path === "/api/workspace/browse") {
       const requestedPath = url.searchParams.get("path");
       const userProfile = process.env.USERPROFILE || process.env.HOME || "";

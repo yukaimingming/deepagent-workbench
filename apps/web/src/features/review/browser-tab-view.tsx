@@ -98,8 +98,19 @@ export function BrowserTabView({ initialUrl = "https://www.bing.com" }: BrowserT
     }
   };
 
+  const getEffectiveSrc = (rawUrl: string) => {
+    if (!rawUrl) return "";
+    if (rawUrl.startsWith("http://127.0.0.1") || rawUrl.startsWith("http://localhost") || rawUrl.startsWith("/api/")) {
+      return rawUrl;
+    }
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+      return `/api/web-preview/proxy?url=${encodeURIComponent(rawUrl)}`;
+    }
+    return rawUrl;
+  };
+
   return (
-    <div className="flex flex-1 flex-col h-full overflow-hidden bg-black text-zinc-200">
+    <div className="flex flex-1 flex-col size-full h-full overflow-hidden bg-black text-zinc-200">
       <WebPreview
         defaultUrl={currentUrl}
         onUrlChange={handleNavigate}
@@ -150,7 +161,7 @@ export function BrowserTabView({ initialUrl = "https://www.bing.com" }: BrowserT
           {/* 复制 URL 按钮 */}
           <WebPreviewNavigationButton
             onClick={handleCopy}
-            tooltip={copied ? "已复制链接" : "复制链接"}
+            tooltip={copied ? "已复制网址" : "复制网址"}
             className="size-7 rounded-md p-0 text-zinc-400 hover:bg-zinc-800 hover:text-white"
           >
             {copied ? <CheckIcon className="size-3.5 text-emerald-400" /> : <CopyIcon className="size-3.5" />}
@@ -159,37 +170,43 @@ export function BrowserTabView({ initialUrl = "https://www.bing.com" }: BrowserT
           {/* 在新标签页打开备用按钮 */}
           <WebPreviewNavigationButton
             onClick={handleOpenExternal}
-            tooltip="在浏览器独立窗口打开"
+            tooltip="在新标签页中打开原网站"
             className="size-7 rounded-md p-0 text-zinc-400 hover:bg-zinc-800 hover:text-white"
           >
             <ExternalLinkIcon className="size-3.5" />
           </WebPreviewNavigationButton>
         </WebPreviewNavigation>
 
-        {/* 浏览器主体渲染区 */}
-        <div className="relative flex-1 min-h-0 bg-zinc-950">
+        {/* 顶部加载状态条 */}
+        {isLoading && (
+          <div className="h-0.5 w-full overflow-hidden bg-zinc-900">
+            <div className="h-full w-1/3 animate-[shimmer_1.5s_infinite] bg-blue-500" />
+          </div>
+        )}
+
+        {/* 跨域安全策略说明提示条（严格对齐 Microsoft Agent 规范，位于导航条下方） */}
+        <div className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-950/60 px-3 py-1.5 text-[11px] text-zinc-400 select-none">
+          <div className="flex items-center gap-1.5 truncate">
+            <ShieldAlertIcon className="size-3.5 shrink-0 text-amber-500/80" />
+            <span className="truncate">Webview 预览模式：若网站受 X-Frame 限制，可随时点击右侧在新标签页打开</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenExternal}
+            className="shrink-0 text-blue-400 hover:underline cursor-pointer ml-2"
+          >
+            在新标签页打开 ↗
+          </button>
+        </div>
+
+        {/* 主体 Webview 内容呈现区（撑满全屏高度，背景纯白避免黑边） */}
+        <div className="relative flex flex-1 flex-col size-full min-h-0 bg-white">
           <WebPreviewBody
             key={iframeKey}
-            src={currentUrl}
+            src={getEffectiveSrc(currentUrl)}
+            className="size-full flex-1 border-0 bg-white"
             onLoad={() => setIsLoading(false)}
-            className="size-full border-0 bg-white"
           />
-
-          {/* 提示层：若网站有同源安全策略(X-Frame-Options)限制时的引导提示条 */}
-          <div className="absolute bottom-2 right-2 left-2 flex items-center justify-between rounded-lg border border-zinc-800/80 bg-zinc-900/90 px-3 py-1.5 text-[11px] text-zinc-400 backdrop-blur pointer-events-auto shadow-lg">
-            <div className="flex items-center gap-1.5 truncate">
-              <ShieldAlertIcon className="size-3.5 shrink-0 text-amber-400/90" />
-              <span className="truncate">如部分网页因安全限制禁止被嵌入预览，可点击右侧在新窗口打开</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleOpenExternal}
-              className="ml-2 shrink-0 flex items-center gap-1 text-sky-400 hover:text-sky-300 font-medium underline-offset-2 hover:underline"
-            >
-              <span>外部打开</span>
-              <ExternalLinkIcon className="size-3" />
-            </button>
-          </div>
         </div>
       </WebPreview>
     </div>
