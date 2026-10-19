@@ -6,6 +6,74 @@
 
 ---
 
+## 功能预览 (Feature Preview)
+
+### 1. 现代化桌面级智能体工作台（深浅双色主题自适应）
+界面基于 **AI SDK Elements** 与 Tailwind 构建，完美适配全黑极简深色模式与纯净浅色模式。
+
+| 深色模式 (Dark Theme) | 浅色模式 (Light Theme) |
+| :---: | :---: |
+| ![工作台全景-深色](docs/images/01-workbench-dark.png) | ![工作台全景-浅色](docs/images/01-workbench-light.png) |
+
+---
+
+### 2. 生成中排队提问与输入框背面折叠卡片
+在模型仍在思考或生成回答时，支持追加发送提示词；可在输入框背面展开层叠折叠排队卡片，支持**排队执行**或**立即引导**，并在发送后可靠自动清空输入区。底部常驻会话轮次、执行步数、模型耗时、生成速率、首 Token 延迟与缓存命中率指标。
+
+| 排队卡片与会话统计（深色） | 排队卡片与会话统计（浅色） |
+| :---: | :---: |
+| ![排队卡片-深色](docs/images/02-queue-card-and-stats-dark.png) | ![排队卡片-浅色](docs/images/02-queue-card-and-stats-light.png) |
+
+---
+
+### 3. Token 用量与成本统计卡片（参考 Microsoft Agent 交互）
+点击底部状态栏的 Token 用量指示器即可弹出详细用量统计卡片，直观展示输入 Tokens、输出 Tokens、缓存命中与上下文消耗进度仪表盘。
+
+| Token 用量卡片（深色） | Token 用量卡片（浅色） |
+| :---: | :---: |
+| ![Token统计-深色](docs/images/03-token-usage-card-dark.png) | ![Token统计-浅色](docs/images/03-token-usage-card-light.png) |
+
+---
+
+### 4. 权限边界选择（完全访问权限全红高亮）
+底部输入框内置权限范围选择器。「完全访问权限」在下拉菜单与选中状态下均采用全红高亮警示，避免越权误操作。
+
+| 选中状态全红（深色） | 下拉菜单全红高亮（浅色） |
+| :---: | :---: |
+| ![权限全红选中](docs/images/04-permission-red-dark.png) | ![权限下拉菜单全红](docs/images/04-permission-red-dropdown-light.png) |
+
+---
+
+### 5. 侧边栏动态运行指示器
+左侧会话历史列表在 Agent 运行过程中采用 **shadcn UI Base Spinner** 动态旋转，在会话结束后自动转换为对齐 **AgentScope Harness** 风格的简洁消息图标。
+
+| 运行中（Spinner 旋转动效） | 结束后（标准消息图标） | 浅色模式侧边栏 |
+| :---: | :---: | :---: |
+| ![侧边栏运行Spinner](docs/images/05-sidebar-spinner-dark.png) | ![侧边栏消息图标](docs/images/05-sidebar-message-dark.png) | ![浅色侧边栏状态](docs/images/05-sidebar-status-light.png) |
+
+---
+
+### 6. 时间线详细步骤与带色文字微光特效（shadcn Shimmer）
+在 Agent 执行思考、分析文件、写入修改、规划计划与派发子任务等步骤过程中，标签与状态文字采用纯 CSS 的 **shadcn带色文字微光扫过动效**（`shimmer shimmer-color-blue-500/60`），细腻呈现智能体流式执行推进过程。
+
+| 详细执行步骤微光动效（深色） | 详细执行步骤微光动效（浅色） |
+| :---: | :---: |
+| ![时间线微光步骤-深色](docs/images/06-timeline-shimmer-steps-dark.png) | ![时间线微光步骤-浅色](docs/images/06-timeline-shimmer-steps-light.png) |
+
+---
+
+### 7. 更多核心智能体能力（任务待办、多栏分屏与安全审批）
+
+| 多窗口分栏并排工作 (Split View) | 独立展开待办清单 (Queue / Todo) |
+| :---: | :---: |
+| ![多窗口分屏](docs/images/07-split-view-panes.png) | ![待办清单展开](docs/images/08-todo-queue-expanded.png) |
+
+| 多模型配置与自动获取 (Settings Modal) | 危险操作人工确认 (Human-in-the-loop) |
+| :---: | :---: |
+| ![模型配置弹窗](docs/images/09-model-settings-modal.png) | ![人工审批卡片](docs/images/10-approval-confirmation.png) |
+
+---
+
 ## 1. 快速开始
 
 ### 前置条件
