@@ -60,7 +60,7 @@ describe("构建产物", () => {
     const html = await readFile(join(distDir, "index.html"), "utf8");
     expect(html).toContain('id="root"');
     expect(html).toMatch(/<script[^>]+src="[^"]*\.js"/);
-    expect(html).toContain("DeepAgent 工作台");
+    expect(html).toContain("langchain harness智能体工作台");
   });
 
   it("html 能被 jsdom 解析且 lang 为 zh-CN", async () => {

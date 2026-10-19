@@ -138,18 +138,21 @@ const MAX_ATTACHMENT_COUNT = 4;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_SIZE = 12 * 1024 * 1024;
 
-function PromptInputAttachmentsDisplay({
+function PromptInputAttachmentsContainer({
   onPreview,
 }: {
   onPreview: (file: ChatAttachment) => void;
 }) {
   const attachments = usePromptInputAttachments();
+  if (attachments.files.length === 0) return null;
   return (
-    <ChatAttachmentGallery
-      files={attachments.files}
-      onPreview={onPreview}
-      onRemove={attachments.remove}
-    />
+    <PromptInputHeader className="px-3 pt-3">
+      <ChatAttachmentGallery
+        files={attachments.files}
+        onPreview={onPreview}
+        onRemove={attachments.remove}
+      />
+    </PromptInputHeader>
   );
 }
 
@@ -678,9 +681,7 @@ function ChatInputContent({
             onError={handleAttachmentError}
             className="chat-prompt-input relative z-10 rounded-2xl border border-zinc-800/80 bg-zinc-950 shadow-none focus-within:border-zinc-600 focus-within:ring-0 transition-colors overflow-visible outline-none"
           >
-            <PromptInputHeader className="px-3 pt-3">
-              <PromptInputAttachmentsDisplay onPreview={setPreviewAttachment} />
-            </PromptInputHeader>
+            <PromptInputAttachmentsContainer onPreview={setPreviewAttachment} />
             <PromptInputBody>
               <PromptInputTextarea
                 value={text}
@@ -693,7 +694,7 @@ function ChatInputContent({
                       ? "输入提示词...（Enter 排队，Ctrl+Enter 立即引导）"
                       : "输入任务描述...（Enter 发送，Shift+Enter 换行）"
                 }
-                className="chat-prompt-textarea min-h-[50px] max-h-[220px] px-3.5 py-2.5 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-0 shadow-none focus-visible:ring-0 bg-transparent"
+                className="chat-prompt-textarea w-full text-left resize-none min-h-[44px] max-h-[220px] px-3.5 pt-3 pb-1.5 text-[14px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-0 shadow-none focus-visible:ring-0 bg-transparent block"
               />
             </PromptInputBody>
 
