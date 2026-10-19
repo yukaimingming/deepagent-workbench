@@ -191,9 +191,9 @@ const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number, elap
   if (isStreaming) {
     return (
       <span className="flex items-center gap-1.5 font-medium text-xs text-zinc-300">
-        <Shimmer as="span" duration={2} spread={3}>
+        <span className="shimmer shimmer-color-blue-500/60">
           正在思考中
-        </Shimmer>
+        </span>
         <span className="tabular-nums text-zinc-400">{elapsedSeconds} 秒</span>
       </span>
     );

@@ -165,7 +165,11 @@ function ReasoningActivity({ item }: { item: Extract<ProcessTimelineItem, { kind
     <details className="process-activity-enter group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="flex w-full cursor-pointer list-none items-center gap-2 text-[13px] text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
         <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
-        {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="shrink-0 font-medium">思考</Shimmer> : <span className="shrink-0">思考</span>}
+        {item.streaming ? (
+          <span className="shimmer shimmer-color-blue-500/60 shrink-0 font-medium">思考</span>
+        ) : (
+          <span className="shrink-0">思考</span>
+        )}
         {!open && <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>}
         <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
@@ -202,7 +206,11 @@ function ToolActivityRow({
       <div className="min-w-0 flex-1">
         <details className="group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
           <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 [&::-webkit-details-marker]:hidden">
-            {live ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{activityLabel(activity)}</Shimmer> : <span>{activityLabel(activity)}</span>}
+            {live ? (
+              <span className="shimmer shimmer-color-blue-500/60 font-medium">{activityLabel(activity)}</span>
+            ) : (
+              <span>{activityLabel(activity)}</span>
+            )}
             {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
             <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
@@ -343,7 +351,7 @@ export function ProcessActivityGroup({
       >
         {!isComplete ? (
           <span className="text-[13px]">
-            <Shimmer as="span" duration={2} spread={3} className="font-medium">{`${statusLabel}，用时 ${formatElapsedDuration(elapsedMs)}`}</Shimmer>
+            <span className="shimmer shimmer-color-blue-500/60 font-medium">{`${statusLabel}，用时 ${formatElapsedDuration(elapsedMs)}`}</span>
           </span>
         ) : (
           <span className="text-[13px] font-medium">{statusLabel}，用时 {formatElapsedDuration(elapsedMs)}</span>
@@ -362,7 +370,7 @@ export function ProcessActivityGroup({
             const staggerStyle = { animationDelay: `${Math.min(index, 8) * 45}ms` };
             if (item.kind === "assistant") {
               if (item.section === "reasoning") {
-                return <div key={item.id} style={staggerStyle}><ReasoningActivity item={item} /></div>;
+                 return <div key={item.id} style={staggerStyle}><ReasoningActivity item={item} /></div>;
               }
               return (
                 <article key={item.id} className="process-activity-enter" style={staggerStyle}>
@@ -372,7 +380,11 @@ export function ProcessActivityGroup({
                     ) : (
                       <CheckCircle2Icon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
                     )}
-                    {item.streaming ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{item.label.replace(/^已完成/, "正在")}</Shimmer> : <span>{item.label}</span>}
+                    {item.streaming ? (
+                      <span className="shimmer shimmer-color-blue-500/60 font-medium">{item.label.replace(/^已完成/, "正在")}</span>
+                    ) : (
+                      <span>{item.label}</span>
+                    )}
                   </div>
                   <p className={`mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--color-text-secondary)]${item.streaming ? " streaming-caret" : ""}`}>
                     {item.content}
@@ -394,7 +406,11 @@ export function ProcessActivityGroup({
                 <div key={item.id} className="process-activity-enter text-[13px] text-[var(--color-text-secondary)]" style={staggerStyle}>
                   <div className="flex items-center gap-2.5">
                     <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                    {activity.status === "running" || activity.status === "pending" ? <Shimmer as="span" duration={2} spread={3} className="font-medium">{label}</Shimmer> : <span>{label}</span>}
+                    {activity.status === "running" || activity.status === "pending" ? (
+                      <span className="shimmer shimmer-color-blue-500/60 font-medium">{label}</span>
+                    ) : (
+                      <span>{label}</span>
+                    )}
                     {description && <span className="truncate">{description}</span>}
                   </div>
                   {detail?.resultSummary && (

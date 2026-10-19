@@ -849,5 +849,92 @@ html.light .stats-line [data-slot="tooltip-content"] {
   color: #0f172a !important;
 }
 
+/* ================= shadcn shimmer 纯 CSS 文字特效与带 color 工具类 ================= */
+@keyframes tw-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(--shimmer-color, color-mix(in oklch, currentColor 40%, transparent));
+  --shimmer-angle: var(--shimmer-angle-deg, 0deg);
+  background-image: var(--shimmer-image, linear-gradient(
+    calc(90deg + var(--shimmer-angle, 0deg)),
+    var(--_base) calc(50% - var(--_spread)),
+    var(--_highlight) calc(50% - var(--_spread) * 0.5),
+    var(--_highlight) 50%,
+    var(--_highlight) calc(50% + var(--_spread) * 0.5),
+    var(--_base) calc(50% + var(--_spread))
+  ));
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
+  background-position: 0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+@supports (color: color-mix(in lab, red, red)) {
+  .shimmer {
+    background-image: var(--shimmer-image, linear-gradient(
+      calc(90deg + var(--shimmer-angle, 0deg)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    ));
+  }
+}
+
+.shimmer-once {
+  animation-iteration-count: 1;
+}
+
+.shimmer-reverse {
+  animation-direction: reverse;
+}
+
+.shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+/* 带 color 的 shimmer 工具类 (官方规格支持) */
+.shimmer-color-blue-500\/60 {
+  --shimmer-color: color-mix(in oklch, #3b82f6 60%, transparent);
+}
+.shimmer-color-blue-500 {
+  --shimmer-color: #3b82f6;
+}
+.shimmer-color-blue-400 {
+  --shimmer-color: #60a5fa;
+}
+.shimmer-color-sky-500\/60 {
+  --shimmer-color: color-mix(in oklch, #0ea5e9 60%, transparent);
+}
+.shimmer-color-sky-400 {
+  --shimmer-color: #38bdf8;
+}
+
+.shimmer:where([dir="rtl"], [dir="rtl"] *) {
+  animation-direction: reverse;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    -webkit-text-fill-color: currentColor;
+    background-image: none;
+    animation: none;
+  }
+}
+
 
 

@@ -658,9 +658,9 @@ export function ChatMessages({
                     <Message from="assistant" className="w-full">
                       <MessageContent className="text-zinc-100 w-full text-[14px]">
                         {message.streaming && message.content.length === 0 ? (
-                          <span className="text-[13px] text-zinc-500 animate-pulse">
-                            正在输出回答…
-                          </span>
+                          <p className="shimmer shimmer-color-blue-500/60 text-[13.5px]">
+                            Generating response&hellip;
+                          </p>
                         ) : message.content.length > 0 ? (
                           <div className={cn("w-full text-zinc-100", message.streaming && "streaming-caret")}>
                             <MessageResponse mode="static" isAnimating={message.streaming}>
