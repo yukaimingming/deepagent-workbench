@@ -170,10 +170,20 @@ function ReasoningActivity({ item }: { item: Extract<ProcessTimelineItem, { kind
         ) : (
           <span className="shrink-0">思考</span>
         )}
-        {!open && <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">{reasoningPreview(item.content)}</span>}
+        {!open && (
+          item.streaming ? (
+            <span className="shimmer shimmer-color-blue-500/60 min-w-0 flex-1 truncate text-[12px]">
+              {reasoningPreview(item.content)}
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-muted)]">
+              {reasoningPreview(item.content)}
+            </span>
+          )
+        )}
         <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
-      <div className="ml-[26px] mt-1.5 break-words border-l border-[var(--color-border-subtle)] pl-3 text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+      <div className={`ml-[26px] mt-1.5 break-words border-l border-[var(--color-border-subtle)] pl-3 text-[13px] leading-relaxed ${item.streaming ? "shimmer shimmer-color-blue-500/60" : "text-[var(--color-text-secondary)]"}`}>
         <StreamingText content={item.content} streaming={item.streaming} />
       </div>
     </details>
@@ -211,7 +221,17 @@ function ToolActivityRow({
             ) : (
               <span>{activityLabel(activity)}</span>
             )}
-            {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
+            {summaryText && (
+              live ? (
+                <code className="shimmer shimmer-color-blue-500/60 rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] font-medium">
+                  {summaryText}
+                </code>
+              ) : (
+                <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">
+                  {summaryText}
+                </code>
+              )
+            )}
             <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
           <div className="mt-2 space-y-3">
@@ -386,7 +406,7 @@ export function ProcessActivityGroup({
                       <span>{item.label}</span>
                     )}
                   </div>
-                  <p className={`mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--color-text-secondary)]${item.streaming ? " streaming-caret" : ""}`}>
+                  <p className={`mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed ${item.streaming ? "shimmer shimmer-color-blue-500/60 streaming-caret" : "text-[var(--color-text-secondary)]"}`}>
                     {item.content}
                   </p>
                 </article>
@@ -396,6 +416,7 @@ export function ProcessActivityGroup({
             const activity = item.activity;
             if (activity.kind === "subagent") {
               const detail = activity.detail as { name?: string; goal?: string; resultSummary?: string } | undefined;
+              const isLive = activity.status === "running" || activity.status === "pending";
               const label = activity.status === "completed"
                 ? "完成了子任务"
                 : activity.status === "failed"
@@ -406,12 +427,18 @@ export function ProcessActivityGroup({
                 <div key={item.id} className="process-activity-enter text-[13px] text-[var(--color-text-secondary)]" style={staggerStyle}>
                   <div className="flex items-center gap-2.5">
                     <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
-                    {activity.status === "running" || activity.status === "pending" ? (
+                    {isLive ? (
                       <span className="shimmer shimmer-color-blue-500/60 font-medium">{label}</span>
                     ) : (
                       <span>{label}</span>
                     )}
-                    {description && <span className="truncate">{description}</span>}
+                    {description && (
+                      isLive ? (
+                        <span className="shimmer shimmer-color-blue-500/60 truncate">{description}</span>
+                      ) : (
+                        <span className="truncate">{description}</span>
+                      )
+                    )}
                   </div>
                   {detail?.resultSummary && (
                     <p className="ml-[26px] mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--color-text-primary)]">
@@ -424,6 +451,12 @@ export function ProcessActivityGroup({
 
             return <ToolActivityRow key={item.id} itemId={item.id} activity={activity} style={staggerStyle} />;
           })}
+          {items.length === 0 && isActive && (
+            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+              <BrainCircuitIcon className="size-[18px] w-[18px] shrink-0 text-[var(--color-text-muted)]" />
+              <p className="shimmer shimmer-color-blue-500/60 font-medium">正在规划步骤并启动智能体&hellip;</p>
+            </div>
+          )}
         </div>
       )}
     </section>

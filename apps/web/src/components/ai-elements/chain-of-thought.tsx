@@ -138,9 +138,22 @@ export const ChainOfThoughtStep = memo(
         <div className="absolute top-7 bottom-0 left-1/2 -mx-px w-px bg-border" />
       </div>
       <div className="flex-1 space-y-2 overflow-hidden">
-        <div>{label}</div>
+        <div>
+          {status === "active" ? (
+            <span className="shimmer shimmer-color-blue-500/60 font-medium">{label}</span>
+          ) : (
+            label
+          )}
+        </div>
         {description && (
-          <div className="text-muted-foreground text-xs">{description}</div>
+          <div
+            className={cn(
+              "text-xs",
+              status === "active" ? "shimmer shimmer-color-blue-500/60" : "text-muted-foreground",
+            )}
+          >
+            {description}
+          </div>
         )}
         {children}
       </div>
