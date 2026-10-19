@@ -10,6 +10,7 @@ import {
   AlertCircleIcon,
   Columns2Icon,
   PanelLeftIcon,
+  PanelRightIcon,
   XIcon,
 } from "lucide-react";
 
@@ -50,6 +51,8 @@ export interface ChatPaneProps {
   onSwapPanes?: () => void;
   isSidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  isReviewOpen?: boolean;
+  onToggleReview?: () => void;
   onDropSession?: (droppedSessionId: string) => void;
 }
 
@@ -88,6 +91,8 @@ export function ChatPane({
   onSwapPanes,
   isSidebarOpen,
   onToggleSidebar,
+  isReviewOpen,
+  onToggleReview,
   onDropSession,
 }: ChatPaneProps) {
   const latestTodoActivity = useMemo<Activity | null>(() => {
@@ -195,6 +200,23 @@ export function ChatPane({
                 </button>
               )}
             </div>
+          )}
+
+          {/* 右侧扩展收缩栏开关（浏览器 Webview / Review / 终端） */}
+          {onToggleReview && (
+            <button
+              type="button"
+              onClick={onToggleReview}
+              title={isReviewOpen ? "收起右侧扩展栏" : "展开右侧扩展栏 (Browser / Webview)"}
+              aria-label="右侧扩展栏"
+              className={`rounded p-1 transition-colors ${
+                isReviewOpen
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              }`}
+            >
+              <PanelRightIcon className="size-4" />
+            </button>
           )}
         </div>
       </header>

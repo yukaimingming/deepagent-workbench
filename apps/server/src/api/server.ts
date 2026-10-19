@@ -19,8 +19,10 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { EventEncoder } from "@ag-ui/encoder";
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { z } from "zod";
@@ -53,6 +55,8 @@ export interface ServerOptions {
   /** 注入 fetch 实现，便于测试时不发真实网络请求。 */
   fetchImpl?: typeof fetch;
 }
+
+const execFileAsync = promisify(execFile);
 
 // 前端附件总上限为 12 MiB，Base64 编码后会增大约三分之一，并带有 JSON 开销。
 const MAX_BODY_BYTES = 18 * 1024 * 1024;
@@ -286,6 +290,174 @@ export async function createApp(options: ServerOptions) {
         message: "工作区已解除关联（保留物理磁盘所有文件）",
         path: targetPath,
       });
+      return;
+    }
+
+    if (method === "GET" && path === "/api/git/status") {
+      const rootParam = url.searchParams.get("root");
+      const targetCwd = rootParam && rootParam.trim() ? resolve(rootParam.trim()) : currentWorkspaceRoot;
+      try {
+        const { stdout: branchOut } = await execFileAsync("git", ["branch", "--show-current"], { cwd: targetCwd });
+        const branch = branchOut.trim() || "main";
+        const { stdout: statusOut } = await execFileAsync("git", ["status", "--porcelain=v1"], { cwd: targetCwd });
+
+        const changes: Array<{ path: string; name: string; dir: string; status: string; staged: boolean; isImage: boolean; exists: boolean }> = [];
+        const staged: Array<{ path: string; name: string; dir: string; status: string; staged: boolean; isImage: boolean; exists: boolean }> = [];
+
+        const lines = statusOut.split("\n");
+        const imgExts = [".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"];
+        for (const line of lines) {
+          if (line.length < 3) continue;
+          const x = line[0];
+          const y = line[1];
+          const filePath = line.slice(3).trim();
+          const fileName = basename(filePath);
+          const dir = dirname(filePath);
+          const isImage = imgExts.some((ext) => fileName.toLowerCase().endsWith(ext));
+
+          if (x && x !== " " && x !== "?") {
+            staged.push({
+              path: filePath,
+              name: fileName,
+              dir: dir === "." ? "" : dir,
+              status: x,
+              staged: true,
+              isImage,
+              exists: true,
+            });
+          }
+          if (y && y !== " ") {
+            changes.push({
+              path: filePath,
+              name: fileName,
+              dir: dir === "." ? "" : dir,
+              status: y,
+              staged: false,
+              isImage,
+              exists: true,
+            });
+          }
+        }
+
+        let commits: Array<{ hash: string; subject: string; time: string }> = [];
+        try {
+          const { stdout: logOut } = await execFileAsync("git", ["log", "-n", "10", "--pretty=format:%h|%s|%cr"], { cwd: targetCwd });
+          commits = logOut.split("\n").filter(Boolean).map((l) => {
+            const [hash, subject, time] = l.split("|");
+            return { hash: hash ?? "", subject: subject ?? "", time: time ?? "" };
+          });
+        } catch {
+          // 容错
+        }
+
+        sendJson(res, 200, {
+          isGitRepo: true,
+          branch,
+          repoRoot: targetCwd,
+          changes,
+          staged,
+          commits,
+        });
+      } catch {
+        sendJson(res, 200, {
+          isGitRepo: false,
+          branch: "main",
+          repoRoot: targetCwd,
+          changes: [],
+          staged: [],
+          commits: [],
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/git/diff") {
+      const rootParam = url.searchParams.get("root");
+      const targetCwd = rootParam && rootParam.trim() ? resolve(rootParam.trim()) : currentWorkspaceRoot;
+      const filePath = url.searchParams.get("path") || "";
+      const isStaged = url.searchParams.get("staged") === "true";
+      const commit = url.searchParams.get("commit");
+      const imgExts = [".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"];
+      const isImage = imgExts.some((ext) => filePath.toLowerCase().endsWith(ext));
+
+      try {
+        const args = ["diff"];
+        if (commit && commit !== "uncommitted") {
+          args.push(`${commit}^!`);
+        } else if (isStaged) {
+          args.push("--staged");
+        }
+        if (filePath) {
+          args.push("--", filePath);
+        }
+        const { stdout: diffOut } = await execFileAsync("git", args, { cwd: targetCwd });
+        sendJson(res, 200, {
+          path: filePath,
+          isImage,
+          diff: diffOut,
+        });
+      } catch (err) {
+        sendJson(res, 200, {
+          path: filePath,
+          isImage,
+          diff: "",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (method === "GET" && path === "/api/git/file-content") {
+      const rootParam = url.searchParams.get("root");
+      const targetCwd = rootParam && rootParam.trim() ? resolve(rootParam.trim()) : currentWorkspaceRoot;
+      const filePath = url.searchParams.get("path") || "";
+      const fullPath = resolve(targetCwd, filePath);
+      try {
+        const content = await readFile(fullPath, "utf-8");
+        sendJson(res, 200, { ok: true, path: filePath, content });
+      } catch (err) {
+        sendJson(res, 404, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/api/git/commit") {
+      const body = await readJsonBody(req);
+      const rootParam = typeof body?.root === "string" ? body.root : null;
+      const targetCwd = rootParam && rootParam.trim() ? resolve(rootParam.trim()) : currentWorkspaceRoot;
+      const message = typeof body?.message === "string" ? body.message.trim() : "";
+      if (!message) {
+        sendJson(res, 400, { ok: false, error: "提交说明不能为空" });
+        return;
+      }
+      try {
+        await execFileAsync("git", ["add", "-A"], { cwd: targetCwd });
+        const { stdout } = await execFileAsync("git", ["commit", "-m", message], { cwd: targetCwd });
+        sendJson(res, 200, { ok: true, output: stdout });
+      } catch (err) {
+        sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      return;
+    }
+
+    if (method === "POST" && path === "/api/terminal/exec") {
+      const body = await readJsonBody(req);
+      const command = typeof body?.command === "string" ? body.command.trim() : "";
+      const cwd = typeof body?.cwd === "string" && body.cwd.trim() ? resolve(body.cwd.trim()) : currentWorkspaceRoot;
+      if (!command) {
+        sendJson(res, 400, { error: "缺少命令" });
+        return;
+      }
+      try {
+        const isWin = process.platform === "win32";
+        const shell = isWin ? "powershell.exe" : "/bin/sh";
+        const shellArgs = isWin ? ["-NoProfile", "-Command", command] : ["-c", command];
+        const { stdout, stderr } = await execFileAsync(shell, shellArgs, { cwd, timeout: 30000 });
+        sendJson(res, 200, { output: stdout, error: stderr });
+      } catch (err: unknown) {
+        const execErr = err as { stdout?: string; stderr?: string; message?: string };
+        sendJson(res, 200, { output: execErr.stdout || "", error: execErr.stderr || execErr.message || String(err) });
+      }
       return;
     }
 

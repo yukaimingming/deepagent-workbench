@@ -24,6 +24,7 @@ import { SplitChatView } from "./features/chat/split-chat-view.js";
 import type { ClientState } from "./features/chat/client-reducer.js";
 import type { ChatAttachment } from "./features/chat/chat-attachments.js";
 import { WorkspaceSidebar } from "./features/chat/workspace-sidebar.js";
+import { ReviewSidebar } from "./features/review/review-sidebar.js";
 import { SettingsModal } from "./features/settings/settings-modal.js";
 import { useProviderSettings } from "./features/settings/use-provider-settings.js";
 import { useTheme } from "./features/settings/use-theme.js";
@@ -122,6 +123,36 @@ export function App() {
       return next;
     });
   };
+
+  // 右侧可收缩扩展栏（Review / Webview / Terminal / File）
+  const [isReviewOpen, setIsReviewOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("deepagent_review_open");
+      return saved === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleReview = () => {
+    setIsReviewOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("deepagent_review_open", String(next));
+      } catch {
+        // 忽略
+      }
+      return next;
+    });
+  };
+
+  // 严格按照用户需求：在工作区下或者聊天模式，如果是新建对话，没有修改内容或者没有聊天内容，就应该隐藏，有内容再显示出来
+  const hasChatContent = state.messages.length > 0 || state.activities.length > 0;
+  useEffect(() => {
+    if (!hasChatContent) {
+      setIsReviewOpen(false);
+    }
+  }, [state.threadId, hasChatContent]);
 
   /** 当前工作区目录。若为 null 则表示单纯不在工作区的直接聊天模式。 */
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(() => {
@@ -355,6 +386,7 @@ export function App() {
       // 如果当前已经是空会话，直接复用当前对话，不重复向列表追加多余的「新对话」
       if (state.messages.length === 0 && state.activities.length === 0) {
         sessionsManager.setActiveSessionId(state.threadId);
+        setIsReviewOpen(false);
         return;
       }
       // 保存当前会话
@@ -362,6 +394,7 @@ export function App() {
         saveSessionState(state.threadId, state, workspaceRoot ?? "");
       }
       const newSessionId = cryptoRandomId();
+      setIsReviewOpen(false);
       // 只切换当前视图：旧会话若正在执行，会在后台继续跑完，互不影响。
       newThread(newSessionId);
       sessionsManager.createSession(newSessionId, ws ?? "");
@@ -768,6 +801,8 @@ export function App() {
             onSwapPanes={handleSwapPanes}
             isSidebarOpen={isSidebarOpen}
             onToggleSidebar={toggleSidebar}
+            isReviewOpen={isReviewOpen}
+            onToggleReview={toggleReview}
             onDropSession={(droppedId) => {
               if (droppedId !== state.threadId) {
                 void handleOpenSplitWithSession(droppedId);
@@ -816,6 +851,8 @@ export function App() {
               onSubmitDecisions={handleSubmitDecisionsRight}
               onCloseSplit={handleCloseRightPane}
               onSwapPanes={handleSwapPanes}
+              isReviewOpen={isReviewOpen}
+              onToggleReview={toggleReview}
               onDropSession={(droppedId) => {
                 if (droppedId !== splitSessionId) {
                   void handleOpenSplitWithSession(droppedId);
@@ -824,6 +861,13 @@ export function App() {
             />
           ) : undefined
         }
+      />
+
+      {/* 右侧可收缩扩展栏（Review / Webview / Terminal / File） */}
+      <ReviewSidebar
+        isOpen={isReviewOpen}
+        onToggle={toggleReview}
+        workspaceRoot={workspaceRoot}
       />
 
       {/* 文件夹选择弹窗 */}

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { Activity } from "@deepagent/shared";
 import { Shimmer } from "../../components/ai-elements/shimmer.js";
+import { openInWebPreview } from "../review/web-preview-events.js";
 
 export type ProcessTimelineItem =
   | {
@@ -273,19 +274,21 @@ function ToolActivityRow({
             <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
               <span className="text-[11px] font-medium text-[var(--color-text-muted)]">来源引用：</span>
               {sources.map((src, idx) => (
-                <a
+                <button
                   key={`${src.url}-${idx}`}
-                  href={src.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] px-2.5 py-0.5 text-[11px] text-[var(--color-brand)] transition-colors hover:border-[var(--color-brand)] hover:bg-[var(--color-surface-3)]"
-                  title={`${src.title}\n${src.url}`}
-                  onClick={(e) => e.stopPropagation()}
+                  type="button"
+                  className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] px-2.5 py-0.5 text-[11px] text-[var(--color-brand)] transition-colors hover:border-[var(--color-brand)] hover:bg-[var(--color-surface-3)] cursor-pointer"
+                  title={`${src.title}\n${src.url}\n(点击在右侧浏览器中预览)`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openInWebPreview(src.url, src.title);
+                  }}
                 >
                   <GlobeIcon className="size-3 shrink-0 text-[var(--color-brand)]" />
                   <span className="truncate">{src.title || src.url}</span>
                   <ExternalLinkIcon className="size-2.5 shrink-0 opacity-70" />
-                </a>
+                </button>
               ))}
             </div>
           )}
