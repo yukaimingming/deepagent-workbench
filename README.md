@@ -1,4 +1,4 @@
-# DeepAgent 工作台
+# langchain harness智能工作台
 
 本地运行的 Deep Agent 智能体应用：Deep Agents SDK 提供 Agent 运行时，AG-UI 协议负责前后端通信，React + AI SDK Elements 构成聊天与活动时间线界面。
 
