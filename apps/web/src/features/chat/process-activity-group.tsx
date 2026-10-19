@@ -4,7 +4,9 @@ import {
   BrainCircuitIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ExternalLinkIcon,
   FileSearchIcon,
+  GlobeIcon,
   ListTodoIcon,
   PencilLineIcon,
   TerminalIcon,
@@ -22,6 +24,7 @@ export type ProcessTimelineItem =
       startedAt: number;
       streaming?: boolean;
       section?: "reasoning";
+      reasoningDuration?: number;
     }
   | {
       id: string;
@@ -57,6 +60,8 @@ const TOOL_ACTIONS: Record<string, string> = {
   glob: "查找了文件",
   grep: "搜索了文件",
   delete_file: "删除了文件",
+  web_search: "搜索了网络",
+  search_web: "搜索了网络",
 };
 
 const ACTIVE_TOOL_ACTIONS: Record<string, string> = {
@@ -70,6 +75,8 @@ const ACTIVE_TOOL_ACTIONS: Record<string, string> = {
   glob: "正在查找文件",
   grep: "正在搜索文件",
   delete_file: "正在删除文件",
+  web_search: "正在搜索网络",
+  search_web: "正在搜索网络",
 };
 
 export function formatElapsedDuration(durationMs: number): string {
@@ -143,12 +150,59 @@ function isLiveActivity(activity: Activity): boolean {
 }
 
 function ActionGlyph({ name, className }: { name: string; className?: string }) {
+  if (name === "web_search" || name === "search_web" || name.includes("search") || name.includes("web")) {
+    return <GlobeIcon className={className} />;
+  }
   if (name === "execute") return <TerminalIcon className={className} />;
   if (name === "write_todos") return <PencilLineIcon className={className} />;
   if (name === "read_file" || name === "ls" || name === "grep" || name === "glob") return <FileSearchIcon className={className} />;
   if (name === "task") return <BrainCircuitIcon className={className} />;
   if (name === "delete_file") return <TriangleAlertIcon className={className} />;
   return <ListTodoIcon className={className} />;
+}
+
+export interface ExtractedSource {
+  title: string;
+  url: string;
+  snippet?: string;
+}
+
+function extractToolSources(activity: Activity): ExtractedSource[] {
+  const detail = activity.detail as { output?: unknown } | undefined;
+  if (!detail?.output) return [];
+
+  let parsed: unknown = detail.output;
+  if (typeof detail.output === "string") {
+    try {
+      parsed = JSON.parse(detail.output);
+    } catch {
+      // 尝试匹配文本中的 URL
+      const urlMatches = detail.output.match(/https?:\/\/[^\s"'<>]+/g);
+      if (urlMatches && urlMatches.length > 0) {
+        return Array.from(new Set(urlMatches)).slice(0, 4).map((url) => {
+          let host = url;
+          try {
+            host = new URL(url).hostname;
+          } catch {
+            // 保留原样
+          }
+          return { title: host, url };
+        });
+      }
+      return [];
+    }
+  }
+
+  if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.sources)) {
+      return (obj.sources as unknown[])
+        .filter((s): s is ExtractedSource => Boolean(s && typeof s === "object" && "url" in (s as any)))
+        .slice(0, 5);
+    }
+  }
+
+  return [];
 }
 
 function StreamingText({ content, streaming }: { content: string; streaming?: boolean }) {
@@ -194,6 +248,7 @@ function ToolActivityRow({
   const name = toolName(activity);
   const summaryText = toolInputSummary(activity);
   const sections = detailSections(activity);
+  const sources = extractToolSources(activity);
   const detail = activity.detail as { truncated?: unknown } | undefined;
   const tone = activity.status === "failed"
     ? "text-[var(--color-state-error)]"
@@ -214,6 +269,26 @@ function ToolActivityRow({
             {summaryText && <code className="rounded-md bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--color-text-primary)]">{summaryText}</code>}
             <ChevronDownIcon className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
+          {sources.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+              <span className="text-[11px] font-medium text-[var(--color-text-muted)]">来源引用：</span>
+              {sources.map((src, idx) => (
+                <a
+                  key={`${src.url}-${idx}`}
+                  href={src.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex max-w-[260px] items-center gap-1 truncate rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] px-2.5 py-0.5 text-[11px] text-[var(--color-brand)] transition-colors hover:border-[var(--color-brand)] hover:bg-[var(--color-surface-3)]"
+                  title={`${src.title}\n${src.url}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <GlobeIcon className="size-3 shrink-0 text-[var(--color-brand)]" />
+                  <span className="truncate">{src.title || src.url}</span>
+                  <ExternalLinkIcon className="size-2.5 shrink-0 opacity-70" />
+                </a>
+              ))}
+            </div>
+          )}
           <div className="mt-2 space-y-3">
             {sections.map((section) => (
               <section key={section.label}>
@@ -250,95 +325,125 @@ export function ProcessActivityGroup({
   durationMs,
 }: ProcessActivityGroupProps) {
   const activities = items.flatMap((item) => item.kind === "activity" ? [item.activity] : []);
-  const activeCount = activities.filter((activity) =>
-    activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval",
-  ).length;
   const failedCount = activities.filter((activity) => activity.status === "failed").length;
   const hasStreamingMessage = items.some((item) => item.kind === "assistant" && item.streaming);
-  // 只要本轮仍在执行且最终总结尚未开始输出，即使在思考与工具衔接的短暂间隙也保持「正在分析」，避免状态与折叠来回跳变。
+
+  // 终态判定：严格参考 Microsoft agent 项目
+  // 1. 整轮运行已结束 (runCompleted)；
+  // 2. 最终答复已完成 (finalAnswerComplete)；
+  // 3. 最终答复已开始流式揭示且思考过程已结束 (finalAnswerStreaming && !hasStreamingMessage)；
+  // 4. 当前会话非活跃生成中 (!isActive)。
+  const isComplete = Boolean(
+    runCompleted ||
+    finalAnswerComplete ||
+    !isActive ||
+    (finalAnswerStreaming && !hasStreamingMessage)
+  );
+
+  // 当整轮已完成或正文已进入输出阶段时，activeCount 强制视为 0，杜绝状态残留导致的持续展开
+  const activeCount = isComplete
+    ? 0
+    : activities.filter((activity) =>
+        activity.status === "running" || activity.status === "pending" || activity.status === "waiting_approval",
+      ).length;
+
   const analysisBusy =
-    activeCount > 0 ||
-    hasStreamingMessage ||
-    (isActive && !finalAnswerStreaming && !finalAnswerComplete && !runCompleted);
+    !isComplete &&
+    (activeCount > 0 ||
+      hasStreamingMessage ||
+      (isActive && !finalAnswerStreaming && !finalAnswerComplete && !runCompleted));
+
   const settled = !analysisBusy && items.length > 0;
+
   // 展开与收缩策略：
-  // 1. 过程进行中（思考、中间过程说明、工具调用等执行中，!settled）默认保持展开；
-  // 2. 总体工具和过程详细全部输出完毕、要正式输出正文（settled 为 true）时自动总体收缩；
-  // 3. 用户手动点击标题栏可随时展开/收起查看详情；
-  // 4. 当状态从进行中过渡到正式正文时重置手动状态，确保自然收缩。
+  // 1. 过程进行中（思考、中间过程说明、工具调用等执行中，!settled）大时间线默认保持展开；
+  // 2. 总体工具和思考执行完毕、开始正式输出最后总结正文（settled 为 true）时大时间线自动收缩；
+  // 3. 用户手动点击标题栏可随时展开/收起查看详情；过渡到正式正文时重置手动状态，确保自然收缩。
   const [manualExpanded, setManualExpanded] = useState<boolean | undefined>(undefined);
-  const [lastSettled, setLastSettled] = useState(settled);
-  if (settled !== lastSettled) {
-    setLastSettled(settled);
-    setManualExpanded(undefined);
-  }
+  const prevSettledRef = useRef(settled);
+  useEffect(() => {
+    if (prevSettledRef.current !== settled) {
+      prevSettledRef.current = settled;
+      setManualExpanded(undefined);
+    }
+  }, [settled]);
+
   const expanded = manualExpanded ?? !settled;
-  const isComplete = settled || finalAnswerComplete || runCompleted;
   const statusLabel = isComplete ? "已完成分析" : "正在分析";
 
-  // 计算历史静态结束时间与起始时间，作为缺少 durationMs 时的确定性后备
-  const staticEndCandidates = items.flatMap((item) => {
-    if (item.kind === "activity" && item.activity.endedAt) return [item.activity.endedAt];
-    return [];
-  });
-  const staticStartCandidates = items.map((item) =>
-    item.kind === "assistant" ? item.startedAt : item.activity.startedAt,
-  ).filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
-  const staticSpanMs = (staticEndCandidates.length > 0 && staticStartCandidates.length > 0)
-    ? Math.max(0, Math.max(...staticEndCandidates) - Math.min(...staticStartCandidates))
-    : undefined;
-
-  // 确定的已完成耗时：首选明确记录的 durationMs，备选历史 items 静态跨度
-  const recordedDuration = (typeof durationMs === "number" && durationMs > 0)
-    ? durationMs
-    : staticSpanMs;
-
-  const [mountTime] = useState(() => runStartedAt ?? Date.now());
-  const [now, setNow] = useState(() => Date.now());
-
-  const effectiveStartedAt = runStartedAt ?? mountTime;
-  const timeCandidates = [
-    effectiveStartedAt,
-    ...items.map((item) => item.kind === "assistant" ? item.startedAt : item.activity.startedAt),
-  ].filter((t): t is number => typeof t === "number" && !Number.isNaN(t) && t > 0);
-  const startedAt = timeCandidates.length > 0 ? Math.min(...timeCandidates) : effectiveStartedAt;
-
-  // 运行中的实时动态走表（仅在进行中且未完成时有效，绝对不在历史已完成状态中使用）
-  const liveElapsed = Math.max(0, now - startedAt);
-
-  // 冻结耗时：当本轮完成时定格
-  const [frozenElapsed, setFrozenElapsed] = useState<number | undefined>(() => {
-    // 关键修复：当用户在左侧边栏切换并点击历史对话时，组件挂载时即处于已完成状态，
-    // 此时必须直接使用已记录的历史耗时，绝不能走表当前时间 now！
-    if (isComplete || settled) {
-      return recordedDuration ?? (durationMs ?? 0);
+  // 提取历史活动记录中的精确起始与结束时间，推导稳定的历史耗时（完全隔离当前系统时钟）
+  const itemStartTimes: number[] = [];
+  const itemEndTimes: number[] = [];
+  for (const item of items) {
+    if (item.kind === "assistant") {
+      if (typeof item.startedAt === "number" && item.startedAt > 0) {
+        itemStartTimes.push(item.startedAt);
+        if (typeof item.reasoningDuration === "number" && item.reasoningDuration > 0) {
+          itemEndTimes.push(item.startedAt + item.reasoningDuration * 1000);
+        }
+      }
+    } else {
+      if (typeof item.activity.startedAt === "number" && item.activity.startedAt > 0) {
+        itemStartTimes.push(item.activity.startedAt);
+      }
+      if (typeof item.activity.endedAt === "number" && item.activity.endedAt > 0) {
+        itemEndTimes.push(item.activity.endedAt);
+      }
     }
-    return undefined;
+  }
+
+  // 历史静态耗时秒数（历史会话加载时使用，严格隔离当前时钟）
+  const historySeconds = (() => {
+    if (typeof durationMs === "number" && durationMs > 0) {
+      return Math.max(1, Math.floor(durationMs / 1000));
+    }
+    if (itemStartTimes.length > 0 && itemEndTimes.length > 0) {
+      const minStart = Math.min(...itemStartTimes);
+      const maxEnd = Math.max(...itemEndTimes);
+      if (maxEnd >= minStart) {
+        return Math.max(1, Math.floor((maxEnd - minStart) / 1000));
+      }
+    }
+    return 1;
+  })();
+
+  // 记录本轮组件是否是以已完成状态初次挂载（历史会话）
+  const isHistoryMountRef = useRef<boolean>(!isActive && settled);
+
+  // 严格按 1 秒稳步累加的秒数计数器（实时运行时从 1 秒起步单调累加）
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(() => {
+    return isHistoryMountRef.current ? historySeconds : 1;
   });
 
-  // 当任务从进行中首次变为完成时定格耗时
-  const wasCompleteRef = useRef(isComplete || settled);
+  // 分析完成时锁定的最终秒数（杜绝正文输出或整轮结束时被外部总耗时覆盖跳变！）
+  const lockedSecondsRef = useRef<number | undefined>(undefined);
+
+  // 仅在正在分析中（!isComplete）启动 1 秒步进累加定时器：严禁任何跳秒或回退
   useEffect(() => {
-    if (!wasCompleteRef.current && (isComplete || settled)) {
-      setFrozenElapsed(recordedDuration ?? (durationMs ?? liveElapsed));
-    } else if (wasCompleteRef.current && !(isComplete || settled)) {
-      setFrozenElapsed(undefined);
+    if (isComplete) {
+      if (lockedSecondsRef.current === undefined) {
+        lockedSecondsRef.current = isHistoryMountRef.current ? historySeconds : elapsedSeconds;
+      }
+      return;
     }
-    wasCompleteRef.current = isComplete || settled;
-  }, [isComplete, settled, recordedDuration, durationMs, liveElapsed]);
 
-  // 最终展示耗时：
-  // 只要处于已完成状态（历史会话或运行结束），按优先级：明确记录的历史耗时 > 属性 durationMs > 冻结耗时 > 0；
-  // 无论如何，已完成时绝不接触 liveElapsed（即绝对不让 Date.now() 污染历史耗时）！
-  const elapsedMs = (isComplete || settled)
-    ? (recordedDuration ?? (durationMs !== undefined && durationMs > 0 ? durationMs : undefined) ?? frozenElapsed ?? 0)
-    : liveElapsed;
+    // 重新进入分析时重置锁定
+    lockedSecondsRef.current = undefined;
 
-  useEffect(() => {
-    if (isComplete) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
     return () => window.clearInterval(timer);
-  }, [isComplete]);
+  }, [isComplete, historySeconds, elapsedSeconds]);
+
+  // 最终显示的秒数：分析完成态优先取定格秒数，否则取实时按秒累加值
+  const displaySeconds = isComplete
+    ? (lockedSecondsRef.current ?? (isHistoryMountRef.current ? historySeconds : elapsedSeconds))
+    : elapsedSeconds;
+
+  const displayDurationText = `${Math.floor(displaySeconds / 60)}分${displaySeconds % 60}秒`;
+
   if (items.length === 0 && !isActive) return null;
 
   return (
@@ -351,10 +456,10 @@ export function ProcessActivityGroup({
       >
         {!isComplete ? (
           <span className="text-[13px]">
-            <span className="shimmer shimmer-color-blue-500/60 font-medium">{`${statusLabel}，用时 ${formatElapsedDuration(elapsedMs)}`}</span>
+            <span className="shimmer shimmer-color-blue-500/60 font-medium">{`${statusLabel}，用时 ${displayDurationText}`}</span>
           </span>
         ) : (
-          <span className="text-[13px] font-medium">{statusLabel}，用时 {formatElapsedDuration(elapsedMs)}</span>
+          <span className="text-[13px] font-medium">{statusLabel}，用时 {displayDurationText}</span>
         )}
         {failedCount > 0 && <span className="text-xs text-[var(--color-state-error)]">（{failedCount} 项失败）</span>}
         {expanded ? (
